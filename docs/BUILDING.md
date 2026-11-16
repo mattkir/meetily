@@ -24,27 +24,39 @@ Frozen installation keeps the lockfile and installed dependency set aligned. Whe
 
 Installing frontend dependencies does not prepare `llama-helper`. The desktop dev/build commands expect this sidecar to be staged first. Repeat preparation if the staged binary is removed or the build target changes.
 
-From the repository root, build the helper and inspect the native host target:
+From the repository root, build and stage the LLM helper. On macOS, prefer the helper script (Metal by default); it also patches a macOS 27+ OpenSSL/`cpp-httplib` const mismatch in pinned `llama-cpp-sys-2` 0.1.146 and copies the binary into `frontend/src-tauri/binaries/`:
 
 ```bash
-cargo build -p llama-helper
+./llama-helper/scripts/build-llama-helper.sh
+# release: ./llama-helper/scripts/build-llama-helper.sh release
+```
+
+Manual path (any platform): build the helper and inspect the native host target:
+
+```bash
+cargo build -p meetily-llama-helper
+# macOS Metal: cargo build -p meetily-llama-helper --features metal
 rustc -vV
 ```
 
 Use the value printed after `host:` as `<host-triple>` below. If the helper build fails, stop: do not copy a binary or launch Tauri.
 
-Create `frontend/src-tauri/binaries/`, then copy the built executable using the paths for your platform, relative to the repository root. Replace `<host-triple>` with the actual value printed by `rustc`, not the literal placeholder:
+On recent macOS SDKs, a stock `cargo build -p meetily-llama-helper` can fail inside vendored `httplib.cpp` with `cannot initialize 'X509_NAME *' with 'const X509_NAME *'`. Use `./llama-helper/scripts/build-llama-helper.sh` in that case rather than upgrading `llama-cpp-2` (Meetily pins `=0.1.146`).
+
+Create `frontend/src-tauri/binaries/` if needed, then copy the built executable using the paths for your platform, relative to the repository root. Replace `<host-triple>` with the actual value printed by `rustc`, not the literal placeholder. The macOS script performs this copy for you.
 
 | Platform | Built executable | Staged destination |
 | --- | --- | --- |
 | macOS/Linux | `target/debug/llama-helper` | `frontend/src-tauri/binaries/llama-helper-<host-triple>` |
 | Windows | `target/debug/llama-helper.exe` | `frontend/src-tauri/binaries/llama-helper-<host-triple>.exe` |
 
-For a production build, run `cargo build -p llama-helper --release` and copy the executable from `target/release/` to the same target-suffixed destination, only after the build succeeds.
+The Cargo package is `meetily-llama-helper`; the binary target stays `llama-helper`. Tauri copies each external binary to `target/<profile>/build/<sidecar-name>`, which is also Cargo's build directory for a package of that name. On macOS 27, `unlink` of a directory returns `Operation not permitted`, and `tauri-build` 2.6 panics on it. The package rename keeps Cargo's directory at `target/<profile>/build/meetily-llama-helper` so the sidecar copy can land at `target/<profile>/build/llama-helper`.
 
-These commands build the helper without an explicit GPU backend. Its optional acceleration features are `metal`, `cuda`, and `vulkan`, each requiring a compatible platform and toolchain. Do not forward Whisper's `coreml`, `hipblas`, or `openblas` flags to the helper.
+For a production build, run `cargo build -p meetily-llama-helper --release` (or the script with `release`) and copy `target/release/llama-helper` to the same target-suffixed destination, only after the build succeeds. Do not place binaries under `target/**/build/` — Cargo needs those paths as directories.
 
-These paths assume an ordinary native-host workspace build. With a custom Cargo output directory or cross-compilation, copy from the actual configured output and use the actual build target as the suffix instead of the `rustc` host.
+These commands build the helper without an explicit GPU backend unless you pass `--features` or use the macOS script. Its optional acceleration features are `metal`, `cuda`, and `vulkan`, each requiring a compatible platform and toolchain. Do not forward Whisper's `coreml`, `hipblas`, or `openblas` flags to the helper.
+
+These paths assume an ordinary native-host workspace build (`CARGO_TARGET_DIR` unset). With a custom Cargo output directory or cross-compilation, copy from the actual configured output and use the actual build target as the suffix instead of the `rustc` host.
 
 After staging the helper, run application commands from `frontend/` with dependencies installed:
 

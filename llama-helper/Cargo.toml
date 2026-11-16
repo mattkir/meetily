@@ -1,7 +1,17 @@
 [package]
-name = "llama-helper"
+name = "meetily-llama-helper"
 version = "0.1.0"
 edition = "2021"
+
+# Cargo writes package artifacts under target/<profile>/build/<package-name>.
+# tauri-build copies each externalBin to target/<profile>/build/<sidecar-filename>
+# and, on macOS 27, unlink() of an existing directory returns EPERM (tauri-build
+# 2.6 unwraps that). The package name must differ from the sidecar filename
+# `llama-helper`. The [[bin]] name stays `llama-helper` so the staged file and
+# runtime lookup paths do not change.
+[[bin]]
+name = "llama-helper"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"

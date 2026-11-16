@@ -3498,7 +3498,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "llama-helper"
+name = "meetily-llama-helper"
 version = "0.1.0"
 dependencies = [
  "anyhow",

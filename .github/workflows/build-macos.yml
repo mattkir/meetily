@@ -140,7 +140,7 @@ jobs:
         run: |
           echo "Building llama-helper sidecar with Metal support..."
           # llama.cpp's bundled cpp-httplib does not compile against OpenSSL 4 (const X509_NAME); the helper never uses HTTPS, so build it without OpenSSL.
-          CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE cargo build --release -p llama-helper --features metal
+          CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE cargo build --release -p meetily-llama-helper --features metal
 
           # Copy binary to binaries directory
           mkdir -p frontend/src-tauri/binaries
