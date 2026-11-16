@@ -1,5 +1,6 @@
 //! Insert dictation text into the focused app.
-//! Prefer Accessibility AXValue + selected range; fall back to pasteboard + Cmd+V.
+//! Prefer a verified Accessibility write on native text fields; fall back to
+//! pasteboard + Cmd+V for web/Electron editors and when AX cannot be verified.
 //! Capture paste target on Fn-down; never steal focus via HUD; never log pasted content.
 
 use anyhow::{anyhow, Result};
@@ -11,6 +12,26 @@ use serde::{Deserialize, Serialize};
 pub struct InsertTarget {
     pub pid: i32,
     pub app_name: String,
+}
+
+/// Pure routing decision: when true, skip Accessibility and use clipboard paste.
+/// Used by macOS insert and unit-tested without live AX calls.
+pub fn prefer_clipboard_paste(
+    role: Option<&str>,
+    has_web_area_ancestor: bool,
+    is_electron_app: bool,
+) -> bool {
+    if is_electron_app || has_web_area_ancestor {
+        return true;
+    }
+    !is_native_text_role(role)
+}
+
+pub fn is_native_text_role(role: Option<&str>) -> bool {
+    matches!(
+        role,
+        Some("AXTextField") | Some("AXTextArea") | Some("AXComboBox")
+    )
 }
 
 /// Insert `text` into the previously captured target (or current focus if none).
@@ -43,40 +64,60 @@ pub fn insert_text_to_target(text: &str, target: Option<&InsertTarget>) -> Resul
             }
         }
 
-        match macos::insert_via_accessibility(text) {
-            Ok(()) => {
+        match macos::insert_via_accessibility(text, target) {
+            Ok(role) => {
                 if let Some(t) = target {
                     if !macos::frontmost_matches(t) {
                         return Err(anyhow!(
                             "Frontmost app changed after Accessibility insert"
                         ));
                     }
+                    log::info!(
+                        "Dictation insert via Accessibility app={} pid={} role={} chars={}",
+                        t.app_name,
+                        t.pid,
+                        role.as_deref().unwrap_or("unknown"),
+                        text.chars().count()
+                    );
+                } else {
+                    log::info!(
+                        "Dictation insert via Accessibility role={} chars={}",
+                        role.as_deref().unwrap_or("unknown"),
+                        text.chars().count()
+                    );
                 }
-                log::info!(
-                    "Dictation insert via Accessibility (chars={})",
-                    text.chars().count()
-                );
                 return Ok(InsertMethod::Accessibility);
             }
             Err(e) => {
                 log::warn!(
-                    "Accessibility insert failed ({e}); trying clipboard Cmd+V fallback"
+                    "Accessibility insert skipped/failed ({e}); trying clipboard Cmd+V fallback"
                 );
             }
         }
 
-        macos::insert_via_clipboard_paste(text)?;
+        let paste_pid = target
+            .map(|t| t.pid)
+            .or_else(|| macos::frontmost_pid());
+        macos::insert_via_clipboard_paste(text, paste_pid)?;
         if let Some(t) = target {
             if !macos::frontmost_matches(t) {
                 return Err(anyhow!(
                     "Frontmost app changed after clipboard paste"
                 ));
             }
+            log::info!(
+                "Dictation insert via clipboard paste app={} pid={} chars={}",
+                t.app_name,
+                t.pid,
+                text.chars().count()
+            );
+        } else {
+            log::info!(
+                "Dictation insert via clipboard paste pid={:?} chars={}",
+                paste_pid,
+                text.chars().count()
+            );
         }
-        log::info!(
-            "Dictation insert via clipboard paste (chars={})",
-            text.chars().count()
-        );
         return Ok(InsertMethod::ClipboardPaste);
     }
 
@@ -140,6 +181,39 @@ pub fn copy_text(text: &str) -> Result<()> {
     }
 }
 
+/// Splice `insert` into `current` at a UTF-16 CFRange (Accessibility index units).
+/// Returns the new string and the UTF-16 caret location after the insert.
+pub fn splice_utf16(current: &str, insert: &str, location: isize, length: isize) -> (String, isize) {
+    let utf16: Vec<u16> = current.encode_utf16().collect();
+    let insert_utf16: Vec<u16> = insert.encode_utf16().collect();
+    let start = (location.max(0) as usize).min(utf16.len());
+    let end = (start + length.max(0) as usize).min(utf16.len());
+    let mut out = Vec::with_capacity(utf16.len() - (end - start) + insert_utf16.len());
+    out.extend_from_slice(&utf16[..start]);
+    out.extend_from_slice(&insert_utf16);
+    out.extend_from_slice(&utf16[end..]);
+    let caret = (start + insert_utf16.len()) as isize;
+    (String::from_utf16_lossy(&out), caret)
+}
+
+/// True when `inserted` appears at the UTF-16 range that was written.
+pub fn readback_contains_insert(
+    after: &str,
+    inserted: &str,
+    utf16_start: isize,
+) -> bool {
+    if inserted.is_empty() {
+        return true;
+    }
+    let after_utf16: Vec<u16> = after.encode_utf16().collect();
+    let insert_utf16: Vec<u16> = inserted.encode_utf16().collect();
+    let start = utf16_start.max(0) as usize;
+    if start + insert_utf16.len() > after_utf16.len() {
+        return false;
+    }
+    &after_utf16[start..start + insert_utf16.len()] == insert_utf16.as_slice()
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
     use super::*;
@@ -151,8 +225,10 @@ mod macos {
         CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode, KeyCode,
     };
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+    use foreign_types_shared::ForeignType;
     use objc::{class, msg_send, runtime::Object, sel, sel_impl};
     use std::ffi::c_void;
+    use std::path::PathBuf;
     use std::ptr;
     use std::thread;
     use std::time::Duration;
@@ -166,6 +242,9 @@ mod macos {
     const K_AX_ERROR_SUCCESS: AXError = 0;
     // kAXValueTypeCFRange = 4
     const K_AX_VALUE_CF_RANGE: u32 = 4;
+    const KEYCODE_LEFT_COMMAND: CGKeyCode = 0x37;
+    const PASTEBOARD_RESTORE_MS: u64 = 300;
+    const MAX_PARENT_WALK: usize = 32;
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -190,9 +269,19 @@ mod macos {
             attribute: *const c_void,
             value: *const c_void,
         ) -> AXError;
+        fn AXUIElementIsAttributeSettable(
+            element: AXUIElementRef,
+            attribute: *const c_void,
+            settable: *mut u8,
+        ) -> AXError;
         fn AXValueCreate(value_type: u32, value_ptr: *const c_void) -> AXValueRef;
         fn AXValueGetValue(value: AXValueRef, value_type: u32, value_ptr: *mut c_void) -> bool;
         fn CFRelease(cf: *const c_void);
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventPostToPid(pid: i32, event: *mut c_void);
     }
 
     pub fn is_accessibility_trusted(prompt: bool) -> bool {
@@ -235,19 +324,23 @@ mod macos {
         }
     }
 
-    pub fn frontmost_matches(target: &InsertTarget) -> bool {
+    pub fn frontmost_pid() -> Option<i32> {
         unsafe {
             let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
             if workspace.is_null() {
-                return false;
+                return None;
             }
             let app: *mut Object = msg_send![workspace, frontmostApplication];
             if app.is_null() {
-                return false;
+                return None;
             }
             let pid: i32 = msg_send![app, processIdentifier];
-            pid == target.pid
+            Some(pid)
         }
+    }
+
+    pub fn frontmost_matches(target: &InsertTarget) -> bool {
+        frontmost_pid() == Some(target.pid)
     }
 
     pub fn activate_pid(pid: i32) -> Result<()> {
@@ -322,37 +415,155 @@ mod macos {
         Ok(focused)
     }
 
-    pub fn insert_via_accessibility(text: &str) -> Result<()> {
+    unsafe fn copy_ax_string_attr(element: AXUIElementRef, attr: &str) -> Option<String> {
+        let attr_cf = CFString::new(attr);
+        let mut value: *const c_void = ptr::null();
+        let err = AXUIElementCopyAttributeValue(
+            element,
+            attr_cf.as_concrete_TypeRef() as *const c_void,
+            &mut value,
+        );
+        if err != K_AX_ERROR_SUCCESS || value.is_null() {
+            return None;
+        }
+        let s = cfstring_to_rust(value);
+        CFRelease(value);
+        s
+    }
+
+    unsafe fn has_web_area_ancestor(element: AXUIElementRef) -> bool {
+        let parent_attr = CFString::new("AXParent");
+        let mut current: *const c_void = element as *const c_void;
+        // Do not release the original focused element here.
+        let mut owned: Option<*const c_void> = None;
+        for _ in 0..MAX_PARENT_WALK {
+            let role = copy_ax_string_attr(current as AXUIElementRef, "AXRole");
+            if role.as_deref() == Some("AXWebArea") {
+                if let Some(p) = owned {
+                    CFRelease(p);
+                }
+                return true;
+            }
+            let mut parent: *const c_void = ptr::null();
+            let err = AXUIElementCopyAttributeValue(
+                current as AXUIElementRef,
+                parent_attr.as_concrete_TypeRef() as *const c_void,
+                &mut parent,
+            );
+            if let Some(p) = owned {
+                CFRelease(p);
+            }
+            if err != K_AX_ERROR_SUCCESS || parent.is_null() {
+                return false;
+            }
+            current = parent;
+            owned = Some(parent);
+        }
+        if let Some(p) = owned {
+            CFRelease(p);
+        }
+        false
+    }
+
+    fn bundle_path_for_pid(pid: i32) -> Option<PathBuf> {
+        unsafe {
+            let app: *mut Object = msg_send![
+                class!(NSRunningApplication),
+                runningApplicationWithProcessIdentifier: pid
+            ];
+            if app.is_null() {
+                return None;
+            }
+            let url: *mut Object = msg_send![app, bundleURL];
+            if url.is_null() {
+                return None;
+            }
+            let path_ns: *mut Object = msg_send![url, path];
+            let path = nsstring_to_rust(path_ns)?;
+            Some(PathBuf::from(path))
+        }
+    }
+
+    pub fn is_electron_app(pid: i32) -> bool {
+        let Some(bundle) = bundle_path_for_pid(pid) else {
+            return false;
+        };
+        let electron = bundle
+            .join("Contents")
+            .join("Frameworks")
+            .join("Electron Framework.framework");
+        electron.exists()
+    }
+
+    /// Verified Accessibility insert. Returns the focused role on success.
+    pub fn insert_via_accessibility(
+        text: &str,
+        target: Option<&InsertTarget>,
+    ) -> Result<Option<String>> {
         if !is_accessibility_trusted(false) {
             return Err(anyhow!("Accessibility permission not granted"));
         }
 
         unsafe {
-            let focused = focused_element_system_wide()?;
+            let focused = if let Some(t) = target {
+                focused_element_for_pid(t.pid)?
+            } else {
+                focused_element_system_wide()?
+            };
 
-            // Prefer AXValue + selected range splice when available.
-            if insert_via_ax_value(focused as AXUIElementRef, text).is_ok() {
+            let role = copy_ax_string_attr(focused as AXUIElementRef, "AXRole");
+            let web_area = has_web_area_ancestor(focused as AXUIElementRef);
+            let pid_for_checks = target.map(|t| t.pid).or_else(frontmost_pid);
+            let electron = pid_for_checks
+                .map(is_electron_app)
+                .unwrap_or(false);
+
+            if prefer_clipboard_paste(role.as_deref(), web_area, electron) {
+                let reason = if electron {
+                    "electron app"
+                } else if web_area {
+                    "AXWebArea ancestor"
+                } else {
+                    "non-native text role"
+                };
+                log::info!(
+                    "Dictation skipping Accessibility ({reason}) role={} app={}",
+                    role.as_deref().unwrap_or("unknown"),
+                    target.map(|t| t.app_name.as_str()).unwrap_or("current")
+                );
                 CFRelease(focused);
-                return Ok(());
+                return Err(anyhow!("skip Accessibility: {reason}"));
             }
 
-            let cf_text = CFString::new(text);
-            let selected_attr = CFString::new("AXSelectedText");
-            let set_err = AXUIElementSetAttributeValue(
-                focused as AXUIElementRef,
-                selected_attr.as_concrete_TypeRef() as *const c_void,
-                cf_text.as_concrete_TypeRef() as *const c_void,
-            );
-            CFRelease(focused);
-
-            if set_err != K_AX_ERROR_SUCCESS {
-                return Err(anyhow!("AXSelectedText set failed ({set_err})"));
+            match insert_via_ax_value(focused as AXUIElementRef, text) {
+                Ok(()) => {
+                    CFRelease(focused);
+                    Ok(role)
+                }
+                Err(e) => {
+                    CFRelease(focused);
+                    Err(e)
+                }
             }
-            Ok(())
         }
     }
 
+    unsafe fn attribute_is_settable(element: AXUIElementRef, attr: &str) -> bool {
+        let attr_cf = CFString::new(attr);
+        let mut settable: u8 = 0;
+        let err = AXUIElementIsAttributeSettable(
+            element,
+            attr_cf.as_concrete_TypeRef() as *const c_void,
+            &mut settable,
+        );
+        err == K_AX_ERROR_SUCCESS && settable != 0
+    }
+
     unsafe fn insert_via_ax_value(element: AXUIElementRef, text: &str) -> Result<()> {
+        if !attribute_is_settable(element, "AXValue") {
+            return Err(anyhow!("AXValue not settable"));
+        }
+
         let value_attr = CFString::new("AXValue");
         let mut value_ptr: *const c_void = ptr::null();
         let get_err = AXUIElementCopyAttributeValue(
@@ -368,7 +579,7 @@ mod macos {
         CFRelease(value_ptr);
 
         let mut range = CFRange {
-            location: current.chars().count() as isize,
+            location: current.encode_utf16().count() as isize,
             length: 0,
         };
 
@@ -395,14 +606,8 @@ mod macos {
             CFRelease(range_ptr);
         }
 
-        let chars: Vec<char> = current.chars().collect();
-        let start = (range.location as usize).min(chars.len());
-        let end = (start + range.length.max(0) as usize).min(chars.len());
-        let mut new_chars = Vec::with_capacity(chars.len() + text.chars().count());
-        new_chars.extend_from_slice(&chars[..start]);
-        new_chars.extend(text.chars());
-        new_chars.extend_from_slice(&chars[end..]);
-        let new_value: String = new_chars.into_iter().collect();
+        let insert_start = range.location.max(0);
+        let (new_value, caret_loc) = splice_utf16(current.as_str(), text, range.location, range.length);
 
         let cf_new = CFString::new(&new_value);
         let set_err = AXUIElementSetAttributeValue(
@@ -416,7 +621,7 @@ mod macos {
 
         // Place caret after inserted text.
         let caret = CFRange {
-            location: (start + text.chars().count()) as isize,
+            location: caret_loc,
             length: 0,
         };
         let ax_range = AXValueCreate(
@@ -431,6 +636,22 @@ mod macos {
             );
             CFRelease(ax_range);
         }
+
+        // Read back and require the inserted text at the write range.
+        let mut after_ptr: *const c_void = ptr::null();
+        let after_err = AXUIElementCopyAttributeValue(
+            element,
+            value_attr.as_concrete_TypeRef() as *const c_void,
+            &mut after_ptr,
+        );
+        if after_err != K_AX_ERROR_SUCCESS || after_ptr.is_null() {
+            return Err(anyhow!("AXValue readback failed ({after_err})"));
+        }
+        let after = cfstring_to_rust(after_ptr).unwrap_or_default();
+        CFRelease(after_ptr);
+        if !readback_contains_insert(&after, text, insert_start) {
+            return Err(anyhow!("AXValue readback did not contain inserted text"));
+        }
         Ok(())
     }
 
@@ -439,18 +660,16 @@ mod macos {
         nsstring_to_rust(ns)
     }
 
-    pub fn insert_via_clipboard_paste(text: &str) -> Result<()> {
+    pub fn insert_via_clipboard_paste(text: &str, target_pid: Option<i32>) -> Result<()> {
         let previous = read_pasteboard();
         write_pasteboard(text)?;
 
-        // Synthetic Cmd+V
-        post_key(KeyCode::CHARACTER_V, true, true)?;
-        post_key(KeyCode::CHARACTER_V, false, true)?;
+        post_cmd_v(target_pid)?;
 
-        // Restore previous pasteboard after paste settles (tighter than 350ms).
+        // Restore previous pasteboard after paste settles.
         if let Some(prev) = previous {
             thread::spawn(move || {
-                thread::sleep(Duration::from_millis(120));
+                thread::sleep(Duration::from_millis(PASTEBOARD_RESTORE_MS));
                 let _ = write_pasteboard(&prev);
             });
         }
@@ -464,7 +683,21 @@ mod macos {
         const CHARACTER_V: CGKeyCode = 0x09;
     }
 
-    fn post_key(keycode: CGKeyCode, key_down: bool, with_cmd: bool) -> Result<()> {
+    fn post_cmd_v(target_pid: Option<i32>) -> Result<()> {
+        // Full chord: Command down → V down/up with Command → Command up.
+        post_key(KEYCODE_LEFT_COMMAND, true, false, target_pid)?;
+        post_key(KeyCode::CHARACTER_V, true, true, target_pid)?;
+        post_key(KeyCode::CHARACTER_V, false, true, target_pid)?;
+        post_key(KEYCODE_LEFT_COMMAND, false, false, target_pid)?;
+        Ok(())
+    }
+
+    fn post_key(
+        keycode: CGKeyCode,
+        key_down: bool,
+        with_cmd: bool,
+        target_pid: Option<i32>,
+    ) -> Result<()> {
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
             .map_err(|_| anyhow!("CGEventSource failed"))?;
         let event = CGEvent::new_keyboard_event(source, keycode, key_down)
@@ -472,7 +705,13 @@ mod macos {
         if with_cmd {
             event.set_flags(CGEventFlags::CGEventFlagCommand);
         }
-        event.post(CGEventTapLocation::HID);
+        if let Some(pid) = target_pid {
+            unsafe {
+                CGEventPostToPid(pid, event.as_ptr() as *mut c_void);
+            }
+        } else {
+            event.post(CGEventTapLocation::HID);
+        }
         Ok(())
     }
 
@@ -510,3 +749,82 @@ mod macos {
 
 #[cfg(target_os = "macos")]
 pub use macos::is_accessibility_trusted;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefer_paste_for_electron() {
+        assert!(prefer_clipboard_paste(
+            Some("AXTextArea"),
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn prefer_paste_for_web_area_ancestor() {
+        assert!(prefer_clipboard_paste(
+            Some("AXTextArea"),
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn prefer_ax_for_native_text_roles() {
+        assert!(!prefer_clipboard_paste(
+            Some("AXTextField"),
+            false,
+            false
+        ));
+        assert!(!prefer_clipboard_paste(
+            Some("AXTextArea"),
+            false,
+            false
+        ));
+        assert!(!prefer_clipboard_paste(
+            Some("AXComboBox"),
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn prefer_paste_for_unknown_role() {
+        assert!(prefer_clipboard_paste(Some("AXButton"), false, false));
+        assert!(prefer_clipboard_paste(None, false, false));
+    }
+
+    #[test]
+    fn splice_utf16_ascii() {
+        let (out, caret) = splice_utf16("hello", "XX", 2, 0);
+        assert_eq!(out, "heXXllo");
+        assert_eq!(caret, 4);
+    }
+
+    #[test]
+    fn splice_utf16_replaces_selection() {
+        // location 2, length 3 replaces "cde" → "ab" + "Z" + "f"
+        let (out, caret) = splice_utf16("abcdef", "Z", 2, 3);
+        assert_eq!(out, "abZf");
+        assert_eq!(caret, 3);
+    }
+
+    #[test]
+    fn splice_utf16_emoji_indexes() {
+        // "a👍b" — thumbs-up is two UTF-16 code units.
+        let current = "a👍b";
+        let (out, caret) = splice_utf16(current, "X", 3, 0); // after emoji
+        assert_eq!(out, "a👍Xb");
+        assert_eq!(caret, 4);
+    }
+
+    #[test]
+    fn readback_checks_utf16_range() {
+        assert!(readback_contains_insert("heXXllo", "XX", 2));
+        assert!(!readback_contains_insert("hello", "XX", 2));
+        assert!(readback_contains_insert("a👍Xb", "X", 3));
+    }
+}

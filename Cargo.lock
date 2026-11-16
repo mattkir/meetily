@@ -3608,6 +3608,7 @@ dependencies = [
  "ebur128",
  "esaxx-rs",
  "ffmpeg-sidecar",
+ "foreign-types-shared 0.3.1",
  "futures",
  "futures-channel",
  "futures-util",
