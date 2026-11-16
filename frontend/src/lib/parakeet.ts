@@ -1,3 +1,6 @@
+import { invoke } from '@tauri-apps/api/core';
+import { DEFAULT_PARAKEET_MODEL } from '@/constants/modelDefaults';
+
 // Types for Parakeet (NVIDIA NeMo) integration
 export interface ParakeetModelInfo {
   name: string;
@@ -51,6 +54,8 @@ export interface ModelDisplayInfo {
   tier: 'fastest' | 'balanced' | 'precise';
 }
 
+// Display config for models Rust can download (PARAKEET_MODEL_SPECS).
+// Do not list FP32 / Ultra here — they are not in the download catalog.
 export const MODEL_DISPLAY_CONFIG: Record<string, ModelDisplayInfo> = {
   'parakeet-tdt-0.6b-v3-int8': {
     friendlyName: 'Lightning',
@@ -64,17 +69,11 @@ export const MODEL_DISPLAY_CONFIG: Record<string, ModelDisplayInfo> = {
     icon: '📦',
     tagline: 'Real time • Smaller size',
     tier: 'balanced'
-  },
-  'parakeet-tdt-0.6b-v3-fp32': {
-    friendlyName: 'Precise',
-    icon: '🎯',
-    tagline: '20x real-time • Higher accuracy',
-    tier: 'precise'
   }
 };
 
-// Model configuration for Parakeet models (matching Rust implementation)
-// Supported models: parakeet-tdt-0.6b in v2 and v3 variants
+// Model configuration for Parakeet models (matching Rust PARAKEET_MODEL_SPECS)
+// Supported downloads: int8 v3 (default) and int8 v2 only.
 // Source: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx
 export const PARAKEET_MODEL_CONFIGS: Record<string, Partial<ParakeetModelInfo>> = {
   'parakeet-tdt-0.6b-v3-int8': {
@@ -90,13 +89,6 @@ export const PARAKEET_MODEL_CONFIGS: Record<string, Partial<ParakeetModelInfo>> 
     accuracy: 'High',
     speed: 'Very Fast',
     quantization: 'Int8'
-  },
-  'parakeet-tdt-0.6b-v3-fp32': {
-    description: '20x real-time on M4 Max, higher precision',
-    size_mb: 2554, // Actual download: 2.44GB + 41.8MB encoder + 72.5MB decoder + 0.2MB extras
-    accuracy: 'High',
-    speed: 'Fast',
-    quantization: 'FP32'
   }
 };
 
@@ -153,18 +145,11 @@ export function getModelPerformanceBadge(quantization: QuantizationType): { labe
   }
 }
 
-export function getRecommendedModel(systemSpecs?: { ram: number; cores: number }): string {
-  // Default to Int8 quantized model (fastest)
-  if (!systemSpecs) return 'parakeet-tdt-0.6b-v3-int8';
-
-  // For any system, prefer Int8 for speed
-  // FP32 can be used if user explicitly wants higher precision
-  return 'parakeet-tdt-0.6b-v3-int8';
+export function getRecommendedModel(_systemSpecs?: { ram: number; cores: number }): string {
+  return DEFAULT_PARAKEET_MODEL;
 }
 
 // Tauri command wrappers for Parakeet backend
-import { invoke } from '@tauri-apps/api/core';
-
 export class ParakeetAPI {
   static async init(): Promise<void> {
     await invoke('parakeet_init');

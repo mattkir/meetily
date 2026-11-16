@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, FlaskConical } from 'lucide-react';
+import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, FlaskConical, Keyboard } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { motion } from 'framer-motion';
@@ -10,12 +10,15 @@ import { RecordingSettings } from '@/components/RecordingSettings';
 import { PreferenceSettings } from '@/components/PreferenceSettings';
 import { SummaryModelSettings } from '@/components/SummaryModelSettings';
 import { BetaSettings } from '@/components/BetaSettings';
+import { DictationSettings } from '@/components/DictationSettings';
 import { useConfig } from '@/contexts/ConfigContext';
+import { DEFAULT_PARAKEET_MODEL } from '@/constants/modelDefaults';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 // Tabs configuration (constant)
 const TABS = [
   { value: 'general', label: 'General', icon: Settings2 },
+  { value: 'dictation', label: 'Dictation', icon: Keyboard },
   { value: 'recording', label: 'Recordings', icon: Mic },
   { value: 'Transcriptionmodels', label: 'Transcription', icon: DatabaseIcon },
   { value: 'summaryModels', label: 'Summary', icon: SparkleIcon },
@@ -33,14 +36,21 @@ export default function SettingsPage() {
 
   // Load saved transcript configuration on mount
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const tab = new URLSearchParams(window.location.search).get('tab');
+      if (tab === 'dictation') {
+        setActiveTab('dictation');
+      }
+    }
+
     const loadTranscriptConfig = async () => {
       try {
         const config = await invoke('api_get_transcript_config') as any;
         if (config) {
           console.log('Loaded saved transcript config:', config);
           setTranscriptModelConfig({
-            provider: config.provider || 'localWhisper',
-            model: config.model || 'large-v3',
+            provider: config.provider || 'parakeet',
+            model: config.model || DEFAULT_PARAKEET_MODEL,
             apiKey: config.apiKey || null
           });
         }
@@ -111,6 +121,9 @@ export default function SettingsPage() {
 
             <TabsContent value="general">
               <PreferenceSettings />
+            </TabsContent>
+            <TabsContent value="dictation" className="mt-6">
+              <DictationSettings />
             </TabsContent>
             <TabsContent value="recording">
               <RecordingSettings />

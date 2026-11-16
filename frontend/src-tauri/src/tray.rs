@@ -20,7 +20,7 @@ pub enum RecordingState {
 pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // Start with default menu, will update with actual state after initialization
     // Pass can_record=true initially, will be updated by update_tray_menu immediately
-    let menu = build_menu(app, RecordingState::Stopped, true)?;
+    let menu = build_menu(app, RecordingState::Stopped, true, "Dictation: starting")?;
 
     TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
@@ -46,6 +46,12 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, item_id: &str) {
             focus_main_window(app);
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.eval("window.location.assign('/settings')");
+            }
+        }
+        "dictation_settings" => {
+            focus_main_window(app);
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.eval("window.location.assign('/settings?tab=dictation')");
             }
         }
         "check_updates" => check_updates_handler(app),
@@ -227,7 +233,7 @@ pub fn update_tray_menu<R: Runtime>(app: &AppHandle<R>) {
 pub fn set_tray_state<R: Runtime>(app: &AppHandle<R>, state: RecordingState) {
     log::info!("Tray: Setting intermediate state: {:?}", state);
     // During recording state transitions, we assume recording is allowed (we're already recording)
-    if let Ok(menu) = build_menu(app, state, true) {
+    if let Ok(menu) = build_menu(app, state, true, "Dictation: —") {
         if let Some(tray) = app.tray_by_id("main-tray") {
             let result = tray.set_menu(Some(menu));
             log::info!("Tray: Intermediate state menu update result: {:?}", result);
@@ -306,10 +312,13 @@ pub async fn update_tray_menu_async<R: Runtime>(app: &AppHandle<R>) {
     let can_record = check_can_record(app).await;
     log::info!("Tray: can_record: {}", can_record);
 
-    if let Ok(menu) = build_menu(app, recording_state, can_record) {
+    let dictation_label = dictation_menu_label(app).await;
+
+    if let Ok(menu) = build_menu(app, recording_state, can_record, &dictation_label) {
         if let Some(tray) = app.tray_by_id("main-tray") {
             let result = tray.set_menu(Some(menu));
             log::info!("Tray: Menu update result: {:?}", result);
+            let _ = tray.set_tooltip(Some(format!("Meetily — {dictation_label}")));
         } else {
             log::warn!("Tray: Could not find tray with id 'main-tray'");
         }
@@ -318,10 +327,41 @@ pub async fn update_tray_menu_async<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Refresh tray when dictation phase changes (also refreshes recording items).
+pub async fn refresh_dictation_status<R: Runtime>(app: &AppHandle<R>) {
+    update_tray_menu_async(app).await;
+}
+
+async fn dictation_menu_label<R: Runtime>(app: &AppHandle<R>) -> String {
+    let Some(state) = app.try_state::<crate::dictation::DictationState>() else {
+        return "Dictation: off".into();
+    };
+    let status = state.status().await;
+    if !status.enabled {
+        return "Dictation: disabled".into();
+    }
+    match status.phase {
+        crate::dictation::DictationPhase::Idle => {
+            if status.daily_ready {
+                "Dictation: daily ready".into()
+            } else if status.warm_ready {
+                "Dictation: ready".into()
+            } else {
+                "Dictation: not ready".into()
+            }
+        }
+        crate::dictation::DictationPhase::Listening => "Dictation: listening".into(),
+        crate::dictation::DictationPhase::Processing => "Dictation: processing".into(),
+        crate::dictation::DictationPhase::Error => "Dictation: error".into(),
+        crate::dictation::DictationPhase::BlockedMeeting => "Dictation: blocked (meeting)".into(),
+    }
+}
+
 fn build_menu<R: Runtime>(
     app: &AppHandle<R>,
     state: RecordingState,
     can_record: bool, // True if recording is allowed (onboarding complete OR transcription model ready)
+    dictation_label: &str,
 ) -> tauri::Result<tauri::menu::Menu<R>> {
     let mut builder = MenuBuilder::new(app);
 
@@ -387,6 +427,15 @@ fn build_menu<R: Runtime>(
     }
 
     builder
+        .item(&PredefinedMenuItem::separator(app)?)
+        .item(
+            &MenuItemBuilder::new(dictation_label)
+                .enabled(false)
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("dictation_settings", "Dictation Settings…").build(app)?,
+        )
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&MenuItemBuilder::with_id("open_window", "Open Main Window").build(app)?)
         .item(&MenuItemBuilder::with_id("settings", "Settings").build(app)?)

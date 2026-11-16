@@ -92,7 +92,10 @@ pub use recording_preferences::{
 pub use recording_saver::RecordingSaver;
 pub use level_monitor::{AudioLevelMonitor, AudioLevelData, AudioLevelUpdate};
 pub use buffer_pool::{AudioBufferPool, PooledBuffer};
-pub use post_processor::{PostProcessor, PostProcessRequest, PostProcessResponse};
+pub use post_processor::{
+    cleanup_for_dictation, cleanup_transcript, PostProcessRequest, PostProcessResponse,
+    PostProcessor,
+};
 pub use hardware_detector::{HardwareProfile, AdaptiveWhisperConfig, PerformanceTier, GpuType};
 pub use encode::{
     encode_single_audio, AudioInput

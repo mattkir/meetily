@@ -115,162 +115,241 @@ impl PostProcessor {
 
     /// Process text synchronously (for testing or direct use)
     async fn process_text(request: &PostProcessRequest) -> Result<String> {
-        let text = &request.raw_text;
-
-        // Skip processing for empty or very short text
-        if text.trim().len() < 3 {
-            return Ok(text.clone());
-        }
-
-        // Step 1: Clean repetitive text (most expensive operation)
-        let deduplicated = Self::clean_repetitive_text(text);
-
-        // Step 2: Remove common transcription artifacts
-        let cleaned = Self::remove_artifacts(&deduplicated);
-
-        // Step 3: Normalize whitespace and punctuation
-        let normalized = Self::normalize_text(&cleaned);
-
-        // Step 4: Apply contextual improvements (if not partial)
-        let final_text = if !request.is_partial {
-            Self::apply_contextual_improvements(&normalized)
-        } else {
-            normalized
-        };
-
-        Ok(final_text)
-    }
-
-    /// Clean repetitive text patterns (same as whisper_engine but moved to background)
-    fn clean_repetitive_text(text: &str) -> String {
-        let words: Vec<&str> = text.split_whitespace().collect();
-        if words.len() < 4 {
-            return text.to_string();
-        }
-
-        let mut result = Vec::new();
-        let mut i = 0;
-
-        while i < words.len() {
-            let current_word = words[i];
-
-            // Check for immediate repetitions (same word repeated)
-            if i + 1 < words.len() && words[i + 1] == current_word {
-                result.push(current_word);
-                // Skip repeated instances
-                while i + 1 < words.len() && words[i + 1] == current_word {
-                    i += 1;
-                }
-            }
-            // Check for phrase repetitions
-            else if i + 3 < words.len() {
-                let phrase = &words[i..i+2];
-                let next_phrase = &words[i+2..i+4];
-
-                if phrase == next_phrase {
-                    result.extend_from_slice(phrase);
-                    i += 4; // Skip both phrases
-
-                    // Skip additional repetitions of the same phrase
-                    while i + 1 < words.len() && i + 1 < words.len() - 1 {
-                        let check_phrase = &words[i..std::cmp::min(i+2, words.len())];
-                        if check_phrase == phrase && check_phrase.len() == 2 {
-                            i += 2;
-                        } else {
-                            break;
-                        }
-                    }
-                    continue;
-                }
-                result.push(current_word);
-            } else {
-                result.push(current_word);
-            }
-            i += 1;
-        }
-
-        result.join(" ")
-    }
-
-    /// Remove common transcription artifacts using simple string matching
-    fn remove_artifacts(text: &str) -> String {
-        let mut words: Vec<String> = text.split_whitespace()
-            .map(|w| w.to_string())
-            .collect();
-
-        // Remove common filler words and sounds
-        let fillers = [
-            "uh", "um", "er", "ah", "oh", "hm", "hmm",
-            "uhh", "umm", "err", "ahh", "ohh",
-        ];
-
-        words.retain(|word| {
-            let clean_word_temp = word.to_lowercase();
-            let clean_word = clean_word_temp.trim_matches(|c: char| !c.is_alphabetic());
-            !fillers.contains(&clean_word) || clean_word.len() > 3
-        });
-
-        words.join(" ")
-    }
-
-    /// Normalize text formatting
-    fn normalize_text(text: &str) -> String {
-        let mut normalized = text.trim().to_string();
-
-        // Fix spacing around punctuation
-        normalized = normalized.replace(" .", ".");
-        normalized = normalized.replace(" ,", ",");
-        normalized = normalized.replace(" ?", "?");
-        normalized = normalized.replace(" !", "!");
-
-        // Ensure single space after sentence endings
-        normalized = normalized.replace(".  ", ". ");
-        normalized = normalized.replace("?  ", "? ");
-        normalized = normalized.replace("!  ", "! ");
-
-        // Capitalize first letter of sentences
-        if let Some(first_char) = normalized.chars().next() {
-            if first_char.is_lowercase() {
-                normalized = first_char.to_uppercase().collect::<String>() + &normalized[1..];
-            }
-        }
-
-        normalized
-    }
-
-    /// Apply contextual improvements for final transcripts
-    fn apply_contextual_improvements(text: &str) -> String {
-        let mut improved = text.to_string();
-
-        // Common word corrections (could be expanded with a dictionary)
-        let corrections = [
-            ("cant", "can't"),
-            ("wont", "won't"),
-            ("dont", "don't"),
-            ("doesnt", "doesn't"),
-            ("didnt", "didn't"),
-            ("wouldnt", "wouldn't"),
-            ("couldnt", "couldn't"),
-            ("shouldnt", "shouldn't"),
-            ("isnt", "isn't"),
-            ("arent", "aren't"),
-            ("wasnt", "wasn't"),
-            ("werent", "weren't"),
-            ("hasnt", "hasn't"),
-            ("havent", "haven't"),
-            ("hadnt", "hadn't"),
-        ];
-
-        for (incorrect, correct) in &corrections {
-            improved = improved.replace(incorrect, correct);
-        }
-
-        improved
+        Ok(cleanup_transcript(&request.raw_text, !request.is_partial))
     }
 }
 
 impl Default for PostProcessor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Synchronous heuristic cleanup shared by meeting post-processing and dictation.
+/// Fast path: intended for &lt;10ms on short utterances. Never logs text content.
+pub fn cleanup_transcript(text: &str, apply_contextual: bool) -> String {
+    if text.trim().len() < 3 {
+        return text.to_string();
+    }
+
+    let deduplicated = clean_repetitive_text(text);
+    let cleaned = remove_artifacts(&deduplicated);
+    let normalized = normalize_text(&cleaned);
+
+    if apply_contextual {
+        apply_contextual_improvements(&normalized)
+    } else {
+        normalized
+    }
+}
+
+/// Dictation default polish: full heuristic pass (fillers, punctuation, contractions).
+pub fn cleanup_for_dictation(text: &str) -> String {
+    cleanup_transcript(text, true)
+}
+
+fn clean_repetitive_text(text: &str) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() < 4 {
+        return text.to_string();
+    }
+
+    let mut result = Vec::new();
+    let mut i = 0;
+
+    while i < words.len() {
+        let current_word = words[i];
+
+        if i + 1 < words.len() && words[i + 1] == current_word {
+            result.push(current_word);
+            while i + 1 < words.len() && words[i + 1] == current_word {
+                i += 1;
+            }
+        } else if i + 3 < words.len() {
+            let phrase = &words[i..i + 2];
+            let next_phrase = &words[i + 2..i + 4];
+
+            if phrase == next_phrase {
+                result.extend_from_slice(phrase);
+                i += 4;
+
+                while i + 1 < words.len() && i + 1 < words.len() - 1 {
+                    let check_phrase = &words[i..std::cmp::min(i + 2, words.len())];
+                    if check_phrase == phrase && check_phrase.len() == 2 {
+                        i += 2;
+                    } else {
+                        break;
+                    }
+                }
+                continue;
+            }
+            result.push(current_word);
+        } else {
+            result.push(current_word);
+        }
+        i += 1;
+    }
+
+    result.join(" ")
+}
+
+fn remove_artifacts(text: &str) -> String {
+    let mut words: Vec<String> = text
+        .split_whitespace()
+        .map(|w| w.to_string())
+        .collect();
+
+    let fillers = [
+        "uh", "um", "er", "ah", "oh", "hm", "hmm", "uhh", "umm", "err", "ahh", "ohh",
+    ];
+
+    words.retain(|word| {
+        let clean_word_temp = word.to_lowercase();
+        let clean_word = clean_word_temp.trim_matches(|c: char| !c.is_alphabetic());
+        !fillers.contains(&clean_word) || clean_word.len() > 3
+    });
+
+    words.join(" ")
+}
+
+fn normalize_text(text: &str) -> String {
+    let mut normalized = text.trim().to_string();
+
+    normalized = normalized.replace(" .", ".");
+    normalized = normalized.replace(" ,", ",");
+    normalized = normalized.replace(" ?", "?");
+    normalized = normalized.replace(" !", "!");
+
+    normalized = normalized.replace(".  ", ". ");
+    normalized = normalized.replace("?  ", "? ");
+    normalized = normalized.replace("!  ", "! ");
+
+    if let Some(first_char) = normalized.chars().next() {
+        if first_char.is_lowercase() {
+            let rest: String = normalized.chars().skip(1).collect();
+            normalized = first_char.to_uppercase().collect::<String>() + &rest;
+        }
+    }
+
+    // Light sentence capitalization after .?!
+    let mut out = String::with_capacity(normalized.len());
+    let mut capitalize_next = false;
+    for ch in normalized.chars() {
+        if capitalize_next && ch.is_alphabetic() {
+            out.extend(ch.to_uppercase());
+            capitalize_next = false;
+        } else {
+            out.push(ch);
+            if matches!(ch, '.' | '?' | '!') {
+                capitalize_next = true;
+            } else if !ch.is_whitespace() {
+                capitalize_next = false;
+            }
+        }
+    }
+    out
+}
+
+fn apply_contextual_improvements(text: &str) -> String {
+    let mut improved = text.to_string();
+
+    let corrections = [
+        ("cant", "can't"),
+        ("wont", "won't"),
+        ("dont", "don't"),
+        ("doesnt", "doesn't"),
+        ("didnt", "didn't"),
+        ("wouldnt", "wouldn't"),
+        ("couldnt", "couldn't"),
+        ("shouldnt", "shouldn't"),
+        ("isnt", "isn't"),
+        ("arent", "aren't"),
+        ("wasnt", "wasn't"),
+        ("werent", "weren't"),
+        ("hasnt", "hasn't"),
+        ("havent", "haven't"),
+        ("hadnt", "hadn't"),
+    ];
+
+    for (incorrect, correct) in &corrections {
+        improved = replace_whole_word_ci(&improved, incorrect, correct);
+    }
+
+    improved
+}
+
+/// Case-insensitive whole-word replacement (ASCII word chars + apostrophes).
+fn replace_whole_word_ci(haystack: &str, needle: &str, replacement: &str) -> String {
+    if needle.is_empty() || haystack.is_empty() {
+        return haystack.to_string();
+    }
+
+    let hay_lower = haystack.to_lowercase();
+    let needle_lower = needle.to_lowercase();
+    let mut out = String::with_capacity(haystack.len());
+    let mut cursor = 0usize;
+
+    while let Some(rel) = hay_lower[cursor..].find(&needle_lower) {
+        let start = cursor + rel;
+        let end = start + needle.len();
+
+        let before_ok = if start == 0 {
+            true
+        } else {
+            haystack[..start]
+                .chars()
+                .last()
+                .map(|c| !is_word_char(c))
+                .unwrap_or(true)
+        };
+        let after_ok = if end >= haystack.len() {
+            true
+        } else {
+            haystack[end..]
+                .chars()
+                .next()
+                .map(|c| !is_word_char(c))
+                .unwrap_or(true)
+        };
+
+        out.push_str(&haystack[cursor..start]);
+        if before_ok && after_ok {
+            out.push_str(replacement);
+        } else {
+            out.push_str(&haystack[start..end]);
+        }
+        cursor = end;
+    }
+    out.push_str(&haystack[cursor..]);
+    out
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '\''
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dictation_cleanup_strips_fillers_and_fixes_punctuation() {
+        let raw = "um hello world . this is a test";
+        let cleaned = cleanup_for_dictation(raw);
+        assert!(!cleaned.to_lowercase().contains("um"));
+        assert!(cleaned.contains("Hello") || cleaned.starts_with('H'));
+        assert!(!cleaned.contains(" ."));
+    }
+
+    #[test]
+    fn whole_word_replace_is_case_insensitive() {
+        assert_eq!(
+            replace_whole_word_ci("I cant go", "cant", "can't"),
+            "I can't go"
+        );
+        assert_eq!(
+            replace_whole_word_ci("scant chance", "cant", "can't"),
+            "scant chance"
+        );
     }
 }

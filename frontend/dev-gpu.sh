@@ -163,6 +163,23 @@ else
     exit 1
 fi
 
+# Build and stage dictation-helper (macOS Swift ASR sidecar)
+if [[ "$OSTYPE" == darwin* ]]; then
+    echo ""
+    echo -e "${BLUE}🎙️ Building dictation-helper sidecar...${NC}"
+    DICTATION_HELPER_SCRIPT="$WORKSPACE_ROOT/dictation-helper/scripts/build-and-stage.sh"
+    if [ ! -x "$DICTATION_HELPER_SCRIPT" ]; then
+        DICTATION_HELPER_SCRIPT="$FRONTEND_DIR/../dictation-helper/scripts/build-and-stage.sh"
+    fi
+    if [ -x "$DICTATION_HELPER_SCRIPT" ]; then
+        "$DICTATION_HELPER_SCRIPT" debug || {
+            echo -e "${YELLOW}⚠️ dictation-helper build failed; dictation will use ASR stub${NC}"
+        }
+    else
+        echo -e "${YELLOW}⚠️ dictation-helper stage script missing; skipping${NC}"
+    fi
+fi
+
 # Run tauri dev using npm scripts
 echo ""
 echo -e "${CYAN}Starting complete Tauri application...${NC}"

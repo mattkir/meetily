@@ -1,6 +1,11 @@
 // audio/transcription/engine.rs
 //
 // TranscriptionEngine enum and model initialization/validation logic.
+//
+// Meeting live STT uses in-process Parakeet ONNX / Whisper only. Do not route
+// meeting chunks through dictation-helper (Apple / Parakeet Core ML): that path
+// is mic-only short-utterance ASR and must not share the dual-output meeting
+// pipeline (mixed recording vs VAD speech) or shutdown drain/flush.
 
 use super::provider::TranscriptionProvider;
 use log::{info, warn};

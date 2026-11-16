@@ -73,4 +73,16 @@ For audio changes, start in the relevant subsystem:
 
 Local speech recognition is implemented through the Whisper and Parakeet providers under [audio/transcription/](../frontend/src-tauri/src/audio/transcription/). Whisper model discovery, downloads, loading, and cached context are managed by [whisper_engine.rs](../frontend/src-tauri/src/whisper_engine/whisper_engine.rs).
 
+### Meeting vs dictation engines
+
+| Path | Default engine | Notes |
+| --- | --- | --- |
+| Meeting live STT | Parakeet ONNX int8 (`parakeet-tdt-0.6b-v3-int8`) in-process | Consumes VAD-selected 16 kHz speech only; mixed audio still goes to recording. Do not route through `dictation-helper`. |
+| Meeting multilingual / import / retranscribe | Whisper `large-v3-turbo` (Metal/Core ML) | Recommended Whisper model in Settings; keep as the batch/multilingual path. |
+| OS-wide dictation | Apple `SpeechTranscriber` (default) or FluidAudio Parakeet v3 Core ML (opt-in) via `dictation-helper` | Mic-only; Apple streams live partials while holding Fn; Parakeet finalizes on release. Fail-closed without a healthy helper (no stub paste). Focus-safe AX/clipboard insert; Settings self-test gates daily-ready on warm short e2e &lt; 300 ms. Blocked while a meeting is recording by default. Wire protocol: [PROTOCOL.md](../frontend/src-tauri/src/dictation/PROTOCOL.md). |
+
+Defaults are defined in [config.rs](../frontend/src-tauri/src/config.rs) and [modelDefaults.ts](../frontend/src/constants/modelDefaults.ts). Settings UI recommended badges must match those constants.
+
+**Deferred:** `moondream/parakeet-ultra` remains a future opt-in evaluation only (private clips A/B vs Apple / Parakeet ANE). It is not integrated into meeting or dictation downloads.
+
 Model directories and acceleration behavior depend on application configuration and the compiled backend. Use the current initialization and loading code as the source of truth rather than hardcoding storage paths or assuming runtime GPU fallback. See the [build instructions](BUILDING.md) and [GPU acceleration guide](GPU_ACCELERATION.md) for platform setup.

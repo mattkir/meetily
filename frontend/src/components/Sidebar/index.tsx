@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useImportDialog } from '@/contexts/ImportDialogContext';
 import { useConfig } from '@/contexts/ConfigContext';
+import { DEFAULT_PARAKEET_MODEL } from '@/constants/modelDefaults';
 
 import {
   Dialog,
@@ -75,7 +76,7 @@ const Sidebar: React.FC = () => {
   });
   const [transcriptModelConfig, setTranscriptModelConfig] = useState<TranscriptModelProps>({
     provider: 'parakeet',
-    model: 'parakeet-tdt-0.6b-v3-int8',
+    model: DEFAULT_PARAKEET_MODEL,
   });
   const [settingsSaveSuccess, setSettingsSaveSuccess] = useState<boolean | null>(null);
 

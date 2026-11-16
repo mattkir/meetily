@@ -3,12 +3,14 @@
 /// Centralized definitions for default models and settings.
 /// Used across database initialization, import, and retranscription.
 
-/// Default Whisper model for transcription when no preference is configured.
-/// This is the recommended balance of accuracy and speed.
+/// Default Whisper model when the Whisper meeting provider is selected, or for
+/// import / retranscription. Multilingual/batch path — not the dictation hot path.
+/// Keep in sync with `frontend/src/constants/modelDefaults.ts`.
 pub const DEFAULT_WHISPER_MODEL: &str = "large-v3-turbo";
 
-/// Default Parakeet model for transcription when no preference is configured.
-/// This is the quantized version optimized for speed.
+/// Default Parakeet model for meeting live transcription (ONNX int8, in-process).
+/// Dictation uses Apple / Parakeet Core ML via `dictation-helper` separately.
+/// Keep in sync with `frontend/src/constants/modelDefaults.ts`.
 pub const DEFAULT_PARAKEET_MODEL: &str = "parakeet-tdt-0.6b-v3-int8";
 
 /// Whisper model catalog with metadata for all supported models.

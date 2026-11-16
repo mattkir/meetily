@@ -3,11 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>This application needs access to your microphone to record meeting audio.</string>
+    <string>Meetily needs the microphone for meeting recording and system-wide dictation.</string>
     <key>NSScreenCaptureUsageDescription</key>
     <string>This application needs screen recording permission to capture system audio during meetings.</string>
     <key>NSAudioCaptureUsageDescription</key>
     <string>This application needs permission to capture system audio output for meeting transcription and recording.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Meetily uses Accessibility to insert dictated text into the focused application.</string>
     <key>com.apple.security.device.audio-input</key>
     <true/>
 </dict>

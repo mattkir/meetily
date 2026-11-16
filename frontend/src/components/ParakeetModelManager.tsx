@@ -12,6 +12,7 @@ import {
   getModelDisplayInfo,
   getModelDisplayName
 } from '../lib/parakeet';
+import { DEFAULT_PARAKEET_MODEL } from '@/constants/modelDefaults';
 
 interface ParakeetModelManagerProps {
   selectedModel?: string;
@@ -397,10 +398,10 @@ export function ParakeetModelManager({
   }
 
   const recommendedModel = models.find(m =>
-    m.name === 'parakeet-tdt-0.6b-v3-int8'
+    m.name === DEFAULT_PARAKEET_MODEL
   );
   const otherModels = models.filter(m =>
-    m.name !== 'parakeet-tdt-0.6b-v3-int8'
+    m.name !== DEFAULT_PARAKEET_MODEL
   );
 
   return (

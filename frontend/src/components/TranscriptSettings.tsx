@@ -7,8 +7,6 @@ import { Label } from './ui/label';
 import { Eye, EyeOff, Lock, Unlock } from 'lucide-react';
 import { ModelManager } from './WhisperModelManager';
 import { ParakeetModelManager } from './ParakeetModelManager';
-
-
 export interface TranscriptModelProps {
     provider: 'localWhisper' | 'parakeet' | 'deepgram' | 'elevenLabs' | 'groq' | 'openai';
     model: string;
@@ -121,14 +119,20 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                                     <SelectValue placeholder="Select provider" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="parakeet">⚡ Parakeet (Recommended - Real-time / Accurate)</SelectItem>
-                                    <SelectItem value="localWhisper">🏠 Local Whisper (High Accuracy)</SelectItem>
+                                    <SelectItem value="parakeet">⚡ Parakeet (Recommended for live meetings)</SelectItem>
+                                    <SelectItem value="localWhisper">🏠 Local Whisper (Multilingual / batch)</SelectItem>
                                     {/* <SelectItem value="deepgram">☁️ Deepgram (Backup)</SelectItem>
                                     <SelectItem value="elevenLabs">☁️ ElevenLabs</SelectItem>
                                     <SelectItem value="groq">☁️ Groq</SelectItem>
                                     <SelectItem value="openai">☁️ OpenAI</SelectItem> */}
                                 </SelectContent>
                             </Select>
+                            <p className="text-xs text-gray-500 mt-2 mx-1">
+                              Live meetings use in-process Parakeet (int8) by default. Whisper
+                              large-v3-turbo is best for multilingual import and retranscription.
+                              OS-wide dictation uses a separate Apple / Parakeet Core ML path under
+                              Settings → Dictation.
+                            </p>
 
                             {uiProvider !== 'localWhisper' && uiProvider !== 'parakeet' && (
                                 <Select

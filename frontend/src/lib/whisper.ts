@@ -1,3 +1,6 @@
+import { invoke } from '@tauri-apps/api/core';
+import { DEFAULT_WHISPER_MODEL } from '@/constants/modelDefaults';
+
 // Types for whisper-rs integration
 export interface ModelInfo {
   name: string;
@@ -267,20 +270,13 @@ export function groupModelsByBase(models: ModelInfo[]): Record<string, ModelInfo
   return grouped;
 }
 
-export function getRecommendedModel(systemSpecs?: { ram: number; cores: number }): string {
-  if (!systemSpecs) return 'medium-q5_0'; // Default to balanced quantized model
-
-  if (systemSpecs.ram >= 8000 && systemSpecs.cores >= 8) {
-    return 'large-v3'; // High-end system
-  } else if (systemSpecs.ram >= 4000 && systemSpecs.cores >= 4) {
-    return 'medium'; // Mid-range system
-  }
-  return 'small'; // Lower-spec system
+export function getRecommendedModel(_systemSpecs?: { ram: number; cores: number }): string {
+  // Keep in sync with DEFAULT_WHISPER_MODEL / Rust config.rs — multilingual/batch path.
+  // Meeting live STT defaults to Parakeet; Whisper turbo is the recommended Whisper choice.
+  return DEFAULT_WHISPER_MODEL;
 }
 
 // Tauri command wrappers for whisper-rs backend
-import { invoke } from '@tauri-apps/api/core';
-
 export class WhisperAPI {
   static async init(): Promise<void> {
     await invoke('whisper_init');

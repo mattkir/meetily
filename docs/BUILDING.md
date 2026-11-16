@@ -22,7 +22,7 @@ Frozen installation keeps the lockfile and installed dependency set aligned. Whe
 
 ### First-run sidecar setup
 
-Installing frontend dependencies does not prepare `llama-helper`. The desktop dev/build commands expect this sidecar to be staged first. Repeat preparation if the staged binary is removed or the build target changes.
+Installing frontend dependencies does not prepare `llama-helper` or (on macOS) `dictation-helper`. The desktop dev/build commands expect sidecars to be staged first. Repeat preparation if a staged binary is removed or the build target changes.
 
 From the repository root, build and stage the LLM helper. On macOS, prefer the helper script (Metal by default); it also patches a macOS 27+ OpenSSL/`cpp-httplib` const mismatch in pinned `llama-cpp-sys-2` 0.1.146 and copies the binary into `frontend/src-tauri/binaries/`:
 
@@ -50,13 +50,23 @@ Create `frontend/src-tauri/binaries/` if needed, then copy the built executable 
 | macOS/Linux | `target/debug/llama-helper` | `frontend/src-tauri/binaries/llama-helper-<host-triple>` |
 | Windows | `target/debug/llama-helper.exe` | `frontend/src-tauri/binaries/llama-helper-<host-triple>.exe` |
 
-The Cargo package is `meetily-llama-helper`; the binary target stays `llama-helper`. Tauri copies each external binary to `target/<profile>/build/<sidecar-name>`, which is also Cargo's build directory for a package of that name. On macOS 27, `unlink` of a directory returns `Operation not permitted`, and `tauri-build` 2.6 panics on it. The package rename keeps Cargo's directory at `target/<profile>/build/meetily-llama-helper` so the sidecar copy can land at `target/<profile>/build/llama-helper`.
+The Cargo package is `meetily-llama-helper`; the binary target stays `llama-helper`. Tauri copies each external binary to `target/<profile>/build/<sidecar-name>`, which is also Cargo’s build directory for a package of that name. On macOS 27, `unlink` of a directory returns `Operation not permitted`, and `tauri-build` 2.6 panics on it. The package rename keeps Cargo’s directory at `target/<profile>/build/meetily-llama-helper` so the sidecar copy can land at `target/<profile>/build/llama-helper`.
 
 For a production build, run `cargo build -p meetily-llama-helper --release` (or the script with `release`) and copy `target/release/llama-helper` to the same target-suffixed destination, only after the build succeeds. Do not place binaries under `target/**/build/` — Cargo needs those paths as directories.
 
 These commands build the helper without an explicit GPU backend unless you pass `--features` or use the macOS script. Its optional acceleration features are `metal`, `cuda`, and `vulkan`, each requiring a compatible platform and toolchain. Do not forward Whisper's `coreml`, `hipblas`, or `openblas` flags to the helper.
 
 These paths assume an ordinary native-host workspace build (`CARGO_TARGET_DIR` unset). With a custom Cargo output directory or cross-compilation, copy from the actual configured output and use the actual build target as the suffix instead of the `rustc` host.
+
+#### macOS dictation-helper (Swift ASR)
+
+On macOS 26+ with Xcode, stage the dictation ASR sidecar (Apple `SpeechTranscriber` default; FluidAudio Parakeet v3 Core ML opt-in):
+
+```bash
+./dictation-helper/scripts/build-and-stage.sh release
+```
+
+That builds `dictation-helper` and copies it to `frontend/src-tauri/binaries/dictation-helper-<host-triple>`. Override the path at runtime with `MEETILY_DICTATION_HELPER`. Wire protocol: [`frontend/src-tauri/src/dictation/PROTOCOL.md`](../frontend/src-tauri/src/dictation/PROTOCOL.md). `dev-gpu.sh` / `build-gpu.sh` also stage this helper on macOS.
 
 After staging the helper, run application commands from `frontend/` with dependencies installed:
 

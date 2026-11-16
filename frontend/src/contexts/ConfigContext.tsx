@@ -8,6 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import Analytics from '@/lib/analytics';
 import { toast } from 'sonner';
 import { BetaFeatures, BetaFeatureKey, loadBetaFeatures, saveBetaFeatures } from '@/types/betaFeatures';
+import { DEFAULT_PARAKEET_MODEL } from '@/constants/modelDefaults';
 
 export interface OllamaModel {
   name: string;
@@ -112,7 +113,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   // Transcript model configuration state
   const [transcriptModelConfig, setTranscriptModelConfig] = useState<TranscriptModelProps>({
     provider: 'parakeet',
-    model: 'parakeet-tdt-0.6b-v3-int8',
+    model: DEFAULT_PARAKEET_MODEL,
     apiKey: null
   });
 
@@ -204,7 +205,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
           console.log('[ConfigContext] Loaded saved transcript config:', config);
           setTranscriptModelConfig({
             provider: config.provider || 'parakeet',
-            model: config.model || 'parakeet-tdt-0.6b-v3-int8',
+            model: config.model || DEFAULT_PARAKEET_MODEL,
             apiKey: config.apiKey || null
           });
         }

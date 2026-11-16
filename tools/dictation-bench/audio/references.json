@@ -1,0 +1,6 @@
+{
+  "short": "Send the meeting notes to Alex by Friday.",
+  "disfluent": "Um, so, like, I think we should, uh, postpone the launch until next week.",
+  "technical": "Deploy the Kubernetes pod with the Core M L Speech Transcriber sidecar and measure warm P fifty latency.",
+  "ten_sec": "Please summarize the action items from today's stand-up. First, ship the dictation agent shell. Second, integrate Apple Speech Transcriber. Third, keep meeting transcription intact. Confirm owners before end of day."
+}

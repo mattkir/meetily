@@ -1,0 +1,6 @@
+models/
+logs/
+**/target/
+**/.build/
+*.partial
+.DS_Store

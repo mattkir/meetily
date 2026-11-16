@@ -42,6 +42,7 @@ pub mod audio;
 pub mod config;
 pub mod console_utils;
 pub mod database;
+pub mod dictation;
 pub mod doodle;
 pub mod notifications;
 pub mod ollama;
@@ -579,6 +580,9 @@ pub fn run() {
         )) as NotificationManagerState<tauri::Wry>)
         .manage(audio::init_system_audio_state())
         .manage(summary::summary_engine::ModelManagerState(Arc::new(tokio::sync::Mutex::new(None))))
+        .manage(Arc::new(dictation::session::DictationAgent::new(
+            dictation::settings::DictationSettings::default(),
+        )) as dictation::DictationState)
         .setup(|_app| {
             let verbose = cfg!(debug_assertions)
                 || std::env::var("MEETILY_DEBUG_LOG")
@@ -629,6 +633,40 @@ pub fn run() {
             // Initialize system tray
             if let Err(e) = tray::create_tray(_app.handle()) {
                 log::error!("Failed to create system tray: {}", e);
+            }
+
+            // Start always-on dictation agent (warm-loads dictation-helper when staged)
+            #[cfg(target_os = "macos")]
+            {
+                let dictation_state = _app.state::<dictation::DictationState>().inner().clone();
+                let persisted = dictation::settings::load_settings(_app.handle());
+                // Tray-first launch: honor --hidden / --from-login (login-item helper args).
+                if dictation::autostart::launched_hidden() {
+                    if let Some(main) = _app.get_webview_window("main") {
+                        let _ = main.hide();
+                        log::info!("Main window hidden for --hidden / --from-login launch");
+                    }
+                }
+                let app_for_dictation = _app.handle().clone();
+                let run_cli_self_test = dictation::autostart::wants_dictation_self_test();
+                tauri::async_runtime::spawn(async move {
+                    dictation_state.update_settings(persisted).await;
+                    if let Err(e) = dictation_state.start(app_for_dictation.clone()).await {
+                        log::error!("Failed to start dictation agent: {e}");
+                        if run_cli_self_test {
+                            app_for_dictation.exit(1);
+                        }
+                    } else {
+                        log::info!("Dictation agent started");
+                        if run_cli_self_test {
+                            dictation::commands::run_cli_dictation_self_test(
+                                app_for_dictation,
+                                dictation_state,
+                            )
+                            .await;
+                        }
+                    }
+                });
             }
 
             // Initialize notification system with proper defaults
@@ -951,6 +989,29 @@ pub fn run() {
             audio::import::start_import_audio_command,
             audio::import::cancel_import_command,
             audio::import::is_import_in_progress_command,
+            // Dictation agent (Phase 1 shell)
+            dictation::commands::dictation_get_status,
+            dictation::commands::dictation_get_settings,
+            dictation::commands::dictation_set_settings,
+            dictation::commands::dictation_start_agent,
+            dictation::commands::dictation_stop_agent,
+            dictation::commands::dictation_get_permissions,
+            dictation::commands::dictation_request_accessibility,
+            dictation::commands::dictation_open_permission_settings,
+            dictation::commands::dictation_trigger_microphone_permission,
+            dictation::commands::dictation_get_history,
+            dictation::commands::dictation_clear_history,
+            dictation::commands::dictation_remove_history_entry,
+            dictation::commands::dictation_retry_history_insert,
+            dictation::commands::dictation_copy_history_entry,
+            dictation::commands::dictation_test_insert,
+            dictation::commands::dictation_run_self_test,
+            dictation::commands::dictation_asr_protocol_info,
+            dictation::commands::dictation_helper_available,
+            dictation::commands::dictation_launch_at_login_status,
+            dictation::commands::dictation_set_launch_at_login,
+            dictation::commands::dictation_show_hud,
+            dictation::commands::dictation_hide_hud,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -979,6 +1040,11 @@ pub fn run() {
                         log::info!("Cleaning up sidecar...");
                         if let Err(e) = summary::summary_engine::force_shutdown_sidecar().await {
                             log::error!("Failed to force shutdown sidecar: {}", e);
+                        }
+
+                        #[cfg(target_os = "macos")]
+                        if let Some(dictation) = _app_handle.try_state::<dictation::DictationState>() {
+                            dictation.stop().await;
                         }
                     });
                     log::info!("Application cleanup complete");

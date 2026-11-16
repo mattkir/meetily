@@ -41,7 +41,8 @@
                     "identifier": "main",
                     "description": "Main window capability with file system and media access",
                     "windows": [
-                        "main"
+                        "main",
+                        "dictation-hud"
                     ],
                     "permissions": [
                         "fs:default",
@@ -61,6 +62,10 @@
                         "core:menu:default",
                         "core:tray:default",
                         "core:window:allow-set-title",
+                        "core:window:allow-show",
+                        "core:window:allow-hide",
+                        "core:window:allow-set-position",
+                        "core:window:allow-set-always-on-top",
                         "store:default",
                         "notification:default",
                         "notification:allow-is-permission-granted",
@@ -110,6 +115,7 @@
         ],
         "externalBin": [
             "binaries/llama-helper",
+            "binaries/dictation-helper",
             "binaries/ffmpeg"
         ],
         "linux": {
