@@ -223,6 +223,43 @@ impl DictationAgent {
             Ok(()) => {
                 self.warm_ready.store(true, Ordering::SeqCst);
                 self.set_phase(&app, DictationPhase::Idle, "Ready").await;
+
+                // ASR-only self-test so daily-ready is set without a Settings click.
+                // Skip when CLI already owns the same test (`--dictation-self-test`).
+                let skip_cli = super::autostart::wants_dictation_self_test();
+                let perms = super::permissions::check_permissions();
+                let should_auto_self_test =
+                    settings.enabled && perms.all_granted() && !skip_cli;
+                if should_auto_self_test {
+                    match self.run_self_test(&app, false).await {
+                        Ok(result) => {
+                            log::info!(
+                                "Dictation startup self-test ok daily_ready={} e2e_ms={}",
+                                result.daily_ready,
+                                result.metrics.e2e_ms
+                            );
+                            self.set_phase(
+                                &app,
+                                DictationPhase::Idle,
+                                &result.message,
+                            )
+                            .await;
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Dictation startup self-test failed ({e}); dictation remains usable"
+                            );
+                        }
+                    }
+                } else if !skip_cli {
+                    log::info!(
+                        "Dictation startup self-test skipped enabled={} mic={} accessibility={} input_monitoring={}",
+                        settings.enabled,
+                        perms.microphone,
+                        perms.accessibility,
+                        perms.input_monitoring
+                    );
+                }
             }
             Err(e) => {
                 self.warm_ready.store(false, Ordering::SeqCst);

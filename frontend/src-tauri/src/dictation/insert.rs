@@ -1,6 +1,6 @@
 //! Insert dictation text into the focused app.
 //! Prefer a verified Accessibility write on native text fields; fall back to
-//! pasteboard + Cmd+V for web/Electron editors and when AX cannot be verified.
+//! pasteboard + HID Cmd+V for web/Electron/Excel editors and when AX cannot be verified.
 //! Capture paste target on Fn-down; never steal focus via HUD; never log pasted content.
 
 use anyhow::{anyhow, Result};
@@ -14,17 +14,30 @@ pub struct InsertTarget {
     pub app_name: String,
 }
 
+/// Bundle IDs where Accessibility AXValue writes are unreliable (false success).
+pub const UNRELIABLE_AX_BUNDLE_IDS: &[&str] = &["com.microsoft.Excel"];
+
 /// Pure routing decision: when true, skip Accessibility and use clipboard paste.
 /// Used by macOS insert and unit-tested without live AX calls.
 pub fn prefer_clipboard_paste(
     role: Option<&str>,
     has_web_area_ancestor: bool,
     is_electron_app: bool,
+    bundle_id: Option<&str>,
 ) -> bool {
     if is_electron_app || has_web_area_ancestor {
         return true;
     }
+    if bundle_id.is_some_and(is_unreliable_ax_bundle_id) {
+        return true;
+    }
     !is_native_text_role(role)
+}
+
+pub fn is_unreliable_ax_bundle_id(bundle_id: &str) -> bool {
+    UNRELIABLE_AX_BUNDLE_IDS
+        .iter()
+        .any(|id| bundle_id.eq_ignore_ascii_case(id))
 }
 
 pub fn is_native_text_role(role: Option<&str>) -> bool {
@@ -32,6 +45,33 @@ pub fn is_native_text_role(role: Option<&str>) -> bool {
         role,
         Some("AXTextField") | Some("AXTextArea") | Some("AXComboBox")
     )
+}
+
+/// True when `bundle_path` (or a parent directory) contains Electron Framework.
+/// Covers both the main app and helpers like `Cursor Helper (Renderer).app`.
+pub fn path_looks_like_electron(bundle_path: &std::path::Path) -> bool {
+    let direct = bundle_path
+        .join("Contents")
+        .join("Frameworks")
+        .join("Electron Framework.framework");
+    if direct.exists() {
+        return true;
+    }
+    // Helper apps live under Contents/Frameworks/ beside Electron Framework.
+    for ancestor in bundle_path.ancestors().take(6) {
+        let sibling = ancestor.join("Electron Framework.framework");
+        if sibling.exists() {
+            return true;
+        }
+        let nested = ancestor
+            .join("Contents")
+            .join("Frameworks")
+            .join("Electron Framework.framework");
+        if nested.exists() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Insert `text` into the previously captured target (or current focus if none).
@@ -95,10 +135,8 @@ pub fn insert_text_to_target(text: &str, target: Option<&InsertTarget>) -> Resul
             }
         }
 
-        let paste_pid = target
-            .map(|t| t.pid)
-            .or_else(|| macos::frontmost_pid());
-        macos::insert_via_clipboard_paste(text, paste_pid)?;
+        // HID paste while the captured target stays frontmost (no CGEventPostToPid).
+        macos::insert_via_clipboard_paste(text)?;
         if let Some(t) = target {
             if !macos::frontmost_matches(t) {
                 return Err(anyhow!(
@@ -113,8 +151,7 @@ pub fn insert_text_to_target(text: &str, target: Option<&InsertTarget>) -> Resul
             );
         } else {
             log::info!(
-                "Dictation insert via clipboard paste pid={:?} chars={}",
-                paste_pid,
+                "Dictation insert via clipboard paste chars={}",
                 text.chars().count()
             );
         }
@@ -225,7 +262,6 @@ mod macos {
         CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode, KeyCode,
     };
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
-    use foreign_types_shared::ForeignType;
     use objc::{class, msg_send, runtime::Object, sel, sel_impl};
     use std::ffi::c_void;
     use std::path::PathBuf;
@@ -244,6 +280,7 @@ mod macos {
     const K_AX_VALUE_CF_RANGE: u32 = 4;
     const KEYCODE_LEFT_COMMAND: CGKeyCode = 0x37;
     const PASTEBOARD_RESTORE_MS: u64 = 300;
+    const KEY_EVENT_GAP_MS: u64 = 8;
     const MAX_PARENT_WALK: usize = 32;
 
     #[repr(C)]
@@ -277,11 +314,6 @@ mod macos {
         fn AXValueCreate(value_type: u32, value_ptr: *const c_void) -> AXValueRef;
         fn AXValueGetValue(value: AXValueRef, value_type: u32, value_ptr: *mut c_void) -> bool;
         fn CFRelease(cf: *const c_void);
-    }
-
-    #[link(name = "CoreGraphics", kind = "framework")]
-    extern "C" {
-        fn CGEventPostToPid(pid: i32, event: *mut c_void);
     }
 
     pub fn is_accessibility_trusted(prompt: bool) -> bool {
@@ -465,15 +497,23 @@ mod macos {
         false
     }
 
-    fn bundle_path_for_pid(pid: i32) -> Option<PathBuf> {
+    fn running_app_for_pid(pid: i32) -> Option<*mut Object> {
         unsafe {
             let app: *mut Object = msg_send![
                 class!(NSRunningApplication),
                 runningApplicationWithProcessIdentifier: pid
             ];
             if app.is_null() {
-                return None;
+                None
+            } else {
+                Some(app)
             }
+        }
+    }
+
+    fn bundle_path_for_pid(pid: i32) -> Option<PathBuf> {
+        unsafe {
+            let app = running_app_for_pid(pid)?;
             let url: *mut Object = msg_send![app, bundleURL];
             if url.is_null() {
                 return None;
@@ -484,15 +524,18 @@ mod macos {
         }
     }
 
+    fn bundle_id_for_pid(pid: i32) -> Option<String> {
+        unsafe {
+            let app = running_app_for_pid(pid)?;
+            let bid: *mut Object = msg_send![app, bundleIdentifier];
+            nsstring_to_rust(bid)
+        }
+    }
+
     pub fn is_electron_app(pid: i32) -> bool {
-        let Some(bundle) = bundle_path_for_pid(pid) else {
-            return false;
-        };
-        let electron = bundle
-            .join("Contents")
-            .join("Frameworks")
-            .join("Electron Framework.framework");
-        electron.exists()
+        bundle_path_for_pid(pid)
+            .map(|p| path_looks_like_electron(&p))
+            .unwrap_or(false)
     }
 
     /// Verified Accessibility insert. Returns the focused role on success.
@@ -517,18 +560,30 @@ mod macos {
             let electron = pid_for_checks
                 .map(is_electron_app)
                 .unwrap_or(false);
+            let bundle_id = pid_for_checks.and_then(bundle_id_for_pid);
 
-            if prefer_clipboard_paste(role.as_deref(), web_area, electron) {
+            if prefer_clipboard_paste(
+                role.as_deref(),
+                web_area,
+                electron,
+                bundle_id.as_deref(),
+            ) {
                 let reason = if electron {
                     "electron app"
+                } else if bundle_id
+                    .as_deref()
+                    .is_some_and(is_unreliable_ax_bundle_id)
+                {
+                    "unreliable AX bundle"
                 } else if web_area {
                     "AXWebArea ancestor"
                 } else {
                     "non-native text role"
                 };
                 log::info!(
-                    "Dictation skipping Accessibility ({reason}) role={} app={}",
+                    "Dictation skipping Accessibility ({reason}) role={} bundle={:?} app={}",
                     role.as_deref().unwrap_or("unknown"),
+                    bundle_id,
                     target.map(|t| t.app_name.as_str()).unwrap_or("current")
                 );
                 CFRelease(focused);
@@ -660,11 +715,11 @@ mod macos {
         nsstring_to_rust(ns)
     }
 
-    pub fn insert_via_clipboard_paste(text: &str, target_pid: Option<i32>) -> Result<()> {
+    pub fn insert_via_clipboard_paste(text: &str) -> Result<()> {
         let previous = read_pasteboard();
         write_pasteboard(text)?;
 
-        post_cmd_v(target_pid)?;
+        post_cmd_v_hid()?;
 
         // Restore previous pasteboard after paste settles.
         if let Some(prev) = previous {
@@ -683,35 +738,34 @@ mod macos {
         const CHARACTER_V: CGKeyCode = 0x09;
     }
 
-    fn post_cmd_v(target_pid: Option<i32>) -> Result<()> {
-        // Full chord: Command down → V down/up with Command → Command up.
-        post_key(KEYCODE_LEFT_COMMAND, true, false, target_pid)?;
-        post_key(KeyCode::CHARACTER_V, true, true, target_pid)?;
-        post_key(KeyCode::CHARACTER_V, false, true, target_pid)?;
-        post_key(KEYCODE_LEFT_COMMAND, false, false, target_pid)?;
+    /// Full Command+V chord via HID (not CGEventPostToPid). One event source;
+    /// Command flag on Command-down and both V events; short gaps between posts.
+    fn post_cmd_v_hid() -> Result<()> {
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| anyhow!("CGEventSource failed"))?;
+
+        post_key_hid(&source, KEYCODE_LEFT_COMMAND, true, true)?;
+        thread::sleep(Duration::from_millis(KEY_EVENT_GAP_MS));
+        post_key_hid(&source, KeyCode::CHARACTER_V, true, true)?;
+        thread::sleep(Duration::from_millis(KEY_EVENT_GAP_MS));
+        post_key_hid(&source, KeyCode::CHARACTER_V, false, true)?;
+        thread::sleep(Duration::from_millis(KEY_EVENT_GAP_MS));
+        post_key_hid(&source, KEYCODE_LEFT_COMMAND, false, false)?;
         Ok(())
     }
 
-    fn post_key(
+    fn post_key_hid(
+        source: &CGEventSource,
         keycode: CGKeyCode,
         key_down: bool,
         with_cmd: bool,
-        target_pid: Option<i32>,
     ) -> Result<()> {
-        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
-            .map_err(|_| anyhow!("CGEventSource failed"))?;
-        let event = CGEvent::new_keyboard_event(source, keycode, key_down)
+        let event = CGEvent::new_keyboard_event(source.clone(), keycode, key_down)
             .map_err(|_| anyhow!("CGEvent keyboard failed"))?;
         if with_cmd {
             event.set_flags(CGEventFlags::CGEventFlagCommand);
         }
-        if let Some(pid) = target_pid {
-            unsafe {
-                CGEventPostToPid(pid, event.as_ptr() as *mut c_void);
-            }
-        } else {
-            event.post(CGEventTapLocation::HID);
-        }
+        event.post(CGEventTapLocation::HID);
         Ok(())
     }
 
@@ -753,13 +807,15 @@ pub use macos::is_accessibility_trusted;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn prefer_paste_for_electron() {
         assert!(prefer_clipboard_paste(
             Some("AXTextArea"),
             false,
-            true
+            true,
+            None
         ));
     }
 
@@ -768,8 +824,20 @@ mod tests {
         assert!(prefer_clipboard_paste(
             Some("AXTextArea"),
             true,
-            false
+            false,
+            None
         ));
+    }
+
+    #[test]
+    fn prefer_paste_for_excel_bundle() {
+        assert!(prefer_clipboard_paste(
+            Some("AXTextArea"),
+            false,
+            false,
+            Some("com.microsoft.Excel")
+        ));
+        assert!(is_unreliable_ax_bundle_id("com.microsoft.Excel"));
     }
 
     #[test]
@@ -777,24 +845,52 @@ mod tests {
         assert!(!prefer_clipboard_paste(
             Some("AXTextField"),
             false,
-            false
+            false,
+            None
         ));
         assert!(!prefer_clipboard_paste(
             Some("AXTextArea"),
             false,
-            false
+            false,
+            None
         ));
         assert!(!prefer_clipboard_paste(
             Some("AXComboBox"),
             false,
-            false
+            false,
+            None
         ));
     }
 
     #[test]
     fn prefer_paste_for_unknown_role() {
-        assert!(prefer_clipboard_paste(Some("AXButton"), false, false));
-        assert!(prefer_clipboard_paste(None, false, false));
+        assert!(prefer_clipboard_paste(Some("AXButton"), false, false, None));
+        assert!(prefer_clipboard_paste(None, false, false, None));
+    }
+
+    #[test]
+    fn electron_helper_path_detected() {
+        // Simulate Cursor Helper sitting beside Electron Framework.
+        let tmp = std::env::temp_dir().join(format!(
+            "meetily-electron-test-{}",
+            std::process::id()
+        ));
+        let frameworks = tmp.join("Contents").join("Frameworks");
+        let helper = frameworks.join("Cursor Helper (Renderer).app");
+        let electron = frameworks.join("Electron Framework.framework");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&helper).unwrap();
+        std::fs::create_dir_all(&electron).unwrap();
+        assert!(path_looks_like_electron(&helper));
+        assert!(path_looks_like_electron(&tmp));
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        // Non-electron path.
+        let other = PathBuf::from("/Applications/TextEdit.app");
+        // May or may not exist; without Electron Framework it must be false.
+        if other.exists() {
+            assert!(!path_looks_like_electron(&other));
+        }
     }
 
     #[test]

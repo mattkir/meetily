@@ -33,14 +33,11 @@ export default function DictationHudPage() {
   });
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen<HudPayload>('dictation-hud', (event) => {
+    const unlisten = listen<HudPayload>('dictation-hud', (event) => {
       setPayload(event.payload);
-    }).then((fn) => {
-      unlisten = fn;
     });
     return () => {
-      unlisten?.();
+      unlisten.then((fn) => fn());
     };
   }, []);
 

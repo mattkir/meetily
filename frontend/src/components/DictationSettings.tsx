@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { Switch } from './ui/switch';
 
 type DictationEngine = 'apple' | 'parakeet_v3_coreml';
@@ -166,6 +167,16 @@ export function DictationSettings() {
 
   useEffect(() => {
     refresh();
+  }, [refresh]);
+
+  // Startup (and other) phase changes emit dictation-status; clear amber daily-ready prompt.
+  useEffect(() => {
+    const unlisten = listen('dictation-status', () => {
+      void refresh();
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, [refresh]);
 
   const save = async (next: DictationSettings) => {
