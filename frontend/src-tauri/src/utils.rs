@@ -39,8 +39,11 @@ impl std::fmt::Write for CappedLogLine {
                 self.truncated = true;
                 break;
             }
-            self.value
-                .push(if character.is_control() { ' ' } else { character });
+            self.value.push(if character.is_control() {
+                ' '
+            } else {
+                character
+            });
             self.chars += 1;
         }
         Ok(())
@@ -89,7 +92,10 @@ mod tests {
             url_origin_for_log("https://user:secret@example.com:8443/path?token=secret#fragment"),
             "https://example.com:8443"
         );
-        assert_eq!(url_origin_for_log("mailto:person@example.com"), "<invalid-url>");
+        assert_eq!(
+            url_origin_for_log("mailto:person@example.com"),
+            "<invalid-url>"
+        );
         assert_eq!(bounded_log_line(format_args!("a\r\nb")), "a  b");
 
         let endpoint = "https://user:ENDPOINT_SECRET@example.com/path?token=QUERY_SECRET";
@@ -122,7 +128,10 @@ pub async fn open_system_settings(preference_pane: String) -> Result<(), String>
     use std::process::Command;
 
     // Construct the URL for System Settings
-    let url = format!("x-apple.systempreferences:com.apple.preference.security?{}", preference_pane);
+    let url = format!(
+        "x-apple.systempreferences:com.apple.preference.security?{}",
+        preference_pane
+    );
 
     // Use the 'open' command on macOS to open the URL
     Command::new("open")
@@ -131,4 +140,4 @@ pub async fn open_system_settings(preference_pane: String) -> Result<(), String>
         .map_err(|e| format!("Failed to open system settings: {}", e))?;
 
     Ok(())
-} 
+}

@@ -108,9 +108,7 @@ pub fn insert_text_to_target(text: &str, target: Option<&InsertTarget>) -> Resul
             Ok(role) => {
                 if let Some(t) = target {
                     if !macos::frontmost_matches(t) {
-                        return Err(anyhow!(
-                            "Frontmost app changed after Accessibility insert"
-                        ));
+                        return Err(anyhow!("Frontmost app changed after Accessibility insert"));
                     }
                     log::info!(
                         "Dictation insert via Accessibility app={} pid={} role={} chars={}",
@@ -139,9 +137,7 @@ pub fn insert_text_to_target(text: &str, target: Option<&InsertTarget>) -> Resul
         macos::insert_via_clipboard_paste(text)?;
         if let Some(t) = target {
             if !macos::frontmost_matches(t) {
-                return Err(anyhow!(
-                    "Frontmost app changed after clipboard paste"
-                ));
+                return Err(anyhow!("Frontmost app changed after clipboard paste"));
             }
             log::info!(
                 "Dictation insert via clipboard paste app={} pid={} chars={}",
@@ -214,13 +210,20 @@ pub fn copy_text(text: &str) -> Result<()> {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = text;
-        Err(anyhow!("Dictation clipboard copy is only implemented on macOS"))
+        Err(anyhow!(
+            "Dictation clipboard copy is only implemented on macOS"
+        ))
     }
 }
 
 /// Splice `insert` into `current` at a UTF-16 CFRange (Accessibility index units).
 /// Returns the new string and the UTF-16 caret location after the insert.
-pub fn splice_utf16(current: &str, insert: &str, location: isize, length: isize) -> (String, isize) {
+pub fn splice_utf16(
+    current: &str,
+    insert: &str,
+    location: isize,
+    length: isize,
+) -> (String, isize) {
     let utf16: Vec<u16> = current.encode_utf16().collect();
     let insert_utf16: Vec<u16> = insert.encode_utf16().collect();
     let start = (location.max(0) as usize).min(utf16.len());
@@ -234,11 +237,7 @@ pub fn splice_utf16(current: &str, insert: &str, location: isize, length: isize)
 }
 
 /// True when `inserted` appears at the UTF-16 range that was written.
-pub fn readback_contains_insert(
-    after: &str,
-    inserted: &str,
-    utf16_start: isize,
-) -> bool {
+pub fn readback_contains_insert(after: &str, inserted: &str, utf16_start: isize) -> bool {
     if inserted.is_empty() {
         return true;
     }
@@ -258,9 +257,7 @@ mod macos {
     use core_foundation::boolean::CFBoolean;
     use core_foundation::dictionary::CFDictionary;
     use core_foundation::string::CFString;
-    use core_graphics::event::{
-        CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode, KeyCode,
-    };
+    use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode, KeyCode};
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
     use objc::{class, msg_send, runtime::Object, sel, sel_impl};
     use std::ffi::c_void;
@@ -323,10 +320,7 @@ mod macos {
             }
             let key = CFString::new("AXTrustedCheckOptionPrompt");
             let value = CFBoolean::true_value();
-            let opts = CFDictionary::from_CFType_pairs(&[(
-                key.as_CFType(),
-                value.as_CFType(),
-            )]);
+            let opts = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), value.as_CFType())]);
             AXIsProcessTrustedWithOptions(opts.as_concrete_TypeRef() as *const c_void)
         }
     }
@@ -557,23 +551,13 @@ mod macos {
             let role = copy_ax_string_attr(focused as AXUIElementRef, "AXRole");
             let web_area = has_web_area_ancestor(focused as AXUIElementRef);
             let pid_for_checks = target.map(|t| t.pid).or_else(frontmost_pid);
-            let electron = pid_for_checks
-                .map(is_electron_app)
-                .unwrap_or(false);
+            let electron = pid_for_checks.map(is_electron_app).unwrap_or(false);
             let bundle_id = pid_for_checks.and_then(bundle_id_for_pid);
 
-            if prefer_clipboard_paste(
-                role.as_deref(),
-                web_area,
-                electron,
-                bundle_id.as_deref(),
-            ) {
+            if prefer_clipboard_paste(role.as_deref(), web_area, electron, bundle_id.as_deref()) {
                 let reason = if electron {
                     "electron app"
-                } else if bundle_id
-                    .as_deref()
-                    .is_some_and(is_unreliable_ax_bundle_id)
-                {
+                } else if bundle_id.as_deref().is_some_and(is_unreliable_ax_bundle_id) {
                     "unreliable AX bundle"
                 } else if web_area {
                     "AXWebArea ancestor"
@@ -662,7 +646,8 @@ mod macos {
         }
 
         let insert_start = range.location.max(0);
-        let (new_value, caret_loc) = splice_utf16(current.as_str(), text, range.location, range.length);
+        let (new_value, caret_loc) =
+            splice_utf16(current.as_str(), text, range.location, range.length);
 
         let cf_new = CFString::new(&new_value);
         let set_err = AXUIElementSetAttributeValue(
@@ -871,10 +856,8 @@ mod tests {
     #[test]
     fn electron_helper_path_detected() {
         // Simulate Cursor Helper sitting beside Electron Framework.
-        let tmp = std::env::temp_dir().join(format!(
-            "meetily-electron-test-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("meetily-electron-test-{}", std::process::id()));
         let frameworks = tmp.join("Contents").join("Frameworks");
         let helper = frameworks.join("Cursor Helper (Renderer).app");
         let electron = frameworks.join("Electron Framework.framework");

@@ -108,7 +108,10 @@ fn heuristic_pipeline(raw: &str, settings: &DictationSettings) -> (String, u64) 
     let with_snippets = apply_snippets(&with_dict, &settings.snippets);
     let ms = start.elapsed().as_millis() as u64;
     if ms > 10 {
-        log::warn!("Dictation heuristic polish slow: {ms}ms (chars={})", with_snippets.chars().count());
+        log::warn!(
+            "Dictation heuristic polish slow: {ms}ms (chars={})",
+            with_snippets.chars().count()
+        );
     } else {
         log::debug!(
             "Dictation heuristic polish {}ms chars={}",

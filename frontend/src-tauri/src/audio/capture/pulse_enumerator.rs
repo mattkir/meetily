@@ -439,9 +439,11 @@ fn default_name_impl(
     let default_name: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let default_name_cb = default_name.clone();
 
-    let operation = context.introspect().get_server_info(move |info: &ServerInfo| {
-        *default_name_cb.borrow_mut() = pick(info);
-    });
+    let operation = context
+        .introspect()
+        .get_server_info(move |info: &ServerInfo| {
+            *default_name_cb.borrow_mut() = pick(info);
+        });
 
     run_operation_to_completion(mainloop, &operation)?;
     drop(operation);
@@ -461,19 +463,20 @@ pub fn list_sinks() -> Result<Vec<PulseSink>> {
         .send(Request::ListSinks(tx))
         .map_err(|e| anyhow!("PulseAudio enumerator request failed: {}", e))?;
 
-    let result = rx
-        .recv_timeout(CALLER_TIMEOUT)
-        .map_err(|e| match e {
-            RecvTimeoutError::Timeout => anyhow!(
-                "PulseAudio enumerator response timed out after {:?}",
-                CALLER_TIMEOUT
-            ),
-            RecvTimeoutError::Disconnected => {
-                anyhow!("PulseAudio enumerator thread disconnected")
-            }
-        })?;
+    let result = rx.recv_timeout(CALLER_TIMEOUT).map_err(|e| match e {
+        RecvTimeoutError::Timeout => anyhow!(
+            "PulseAudio enumerator response timed out after {:?}",
+            CALLER_TIMEOUT
+        ),
+        RecvTimeoutError::Disconnected => {
+            anyhow!("PulseAudio enumerator thread disconnected")
+        }
+    })?;
 
-    debug!("pulse_linux::list_sinks: got {} sink(s)", result.as_ref().map(|v| v.len()).unwrap_or(0));
+    debug!(
+        "pulse_linux::list_sinks: got {} sink(s)",
+        result.as_ref().map(|v| v.len()).unwrap_or(0)
+    );
     result
 }
 
@@ -483,17 +486,15 @@ pub fn list_sources() -> Result<Vec<PulseSource>> {
         .send(Request::ListSources(tx))
         .map_err(|e| anyhow!("PulseAudio enumerator request failed: {}", e))?;
 
-    let result = rx
-        .recv_timeout(CALLER_TIMEOUT)
-        .map_err(|e| match e {
-            RecvTimeoutError::Timeout => anyhow!(
-                "PulseAudio enumerator response timed out after {:?}",
-                CALLER_TIMEOUT
-            ),
-            RecvTimeoutError::Disconnected => {
-                anyhow!("PulseAudio enumerator thread disconnected")
-            }
-        })?;
+    let result = rx.recv_timeout(CALLER_TIMEOUT).map_err(|e| match e {
+        RecvTimeoutError::Timeout => anyhow!(
+            "PulseAudio enumerator response timed out after {:?}",
+            CALLER_TIMEOUT
+        ),
+        RecvTimeoutError::Disconnected => {
+            anyhow!("PulseAudio enumerator thread disconnected")
+        }
+    })?;
 
     debug!(
         "pulse_linux::list_sources: got {} source(s)",

@@ -195,9 +195,7 @@ impl AsrClient {
             ));
         }
         if !self.is_healthy() {
-            return Err(anyhow!(
-                "dictation-helper is not ready; warm load required"
-            ));
+            return Err(anyhow!("dictation-helper is not ready; warm load required"));
         }
         Ok(())
     }
@@ -490,13 +488,7 @@ impl AsrClient {
                     let text = resp.text.unwrap_or_default();
                     let asr_ms = asr_start.elapsed().as_millis() as u64;
                     log::info!("dictation ASR final chars={}", text.chars().count());
-                    return Ok((
-                        text,
-                        AsrTiming {
-                            ipc_ms,
-                            asr_ms,
-                        },
-                    ));
+                    return Ok((text, AsrTiming { ipc_ms, asr_ms }));
                 }
                 other => {
                     if resp.partial == Some(true) {
@@ -511,13 +503,7 @@ impl AsrClient {
                         let text = resp.text.unwrap_or_default();
                         let asr_ms = asr_start.elapsed().as_millis() as u64;
                         log::info!("dictation ASR final chars={}", text.chars().count());
-                        return Ok((
-                            text,
-                            AsrTiming {
-                                ipc_ms,
-                                asr_ms,
-                            },
-                        ));
+                        return Ok((text, AsrTiming { ipc_ms, asr_ms }));
                     }
                     log::warn!("unexpected ASR event while finalizing: {other}");
                 }

@@ -67,14 +67,22 @@ async fn fetch(client: &reqwest::Client, url: &str) -> reqwest::Result<Option<Ve
     let mut buf = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         if buf.len() + chunk.len() > MAX_BYTES {
-            perf_debug!("doodle: body exceeds {} bytes (received at least {})", MAX_BYTES, buf.len() + chunk.len());
+            perf_debug!(
+                "doodle: body exceeds {} bytes (received at least {})",
+                MAX_BYTES,
+                buf.len() + chunk.len()
+            );
             return Ok(None);
         }
         buf.extend_from_slice(&chunk);
     }
     let valid = is_valid_png(&buf);
     if !valid {
-        perf_debug!("doodle: invalid PNG header or dimensions ({} bytes, maximum {} px)", buf.len(), MAX_PIXELS);
+        perf_debug!(
+            "doodle: invalid PNG header or dimensions ({} bytes, maximum {} px)",
+            buf.len(),
+            MAX_PIXELS
+        );
     }
     Ok(valid.then_some(buf))
 }
@@ -227,7 +235,13 @@ mod tests {
                     for header in ["user-agent:", "cookie:", "referer:", "authorization:"] {
                         assert!(!headers.contains(header), "unexpected {header} header");
                     }
-                    let path = request.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+                    let path = request
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap();
                     // Oversized responses may be dropped before the server finishes writing.
                     let _ = socket.write_all(&handler(path)).await;
                     let _ = socket.shutdown().await;
@@ -247,7 +261,9 @@ mod tests {
 
     async fn assert_date_saved(dir: &Path) {
         assert_eq!(
-            tokio::fs::read_to_string(dir.join(LAST_CHECK_FILE)).await.unwrap(),
+            tokio::fs::read_to_string(dir.join(LAST_CHECK_FILE))
+                .await
+                .unwrap(),
             today().to_string()
         );
     }
@@ -291,7 +307,11 @@ mod tests {
         let mut other_port = next.clone();
         other_port.set_port(Some(8443)).unwrap();
         assert!(!redirect_allowed(&origin, &other_port, 1));
-        assert!(!redirect_allowed(&origin, &origin.join("/other/a.png").unwrap(), 1));
+        assert!(!redirect_allowed(
+            &origin,
+            &origin.join("/other/a.png").unwrap(),
+            1
+        ));
     }
 
     #[tokio::test]
@@ -304,9 +324,19 @@ mod tests {
         tokio::fs::write(dir.path().join(LAST_CHECK_FILE), format!("{}\n", today()))
             .await
             .unwrap();
-        assert_eq!(sync(&client, origin.as_str(), dir.path(), today()).await.unwrap(), Some(icon.clone()));
+        assert_eq!(
+            sync(&client, origin.as_str(), dir.path(), today())
+                .await
+                .unwrap(),
+            Some(icon.clone())
+        );
         tokio::fs::remove_file(&icon).await.unwrap();
-        assert_eq!(sync(&client, origin.as_str(), dir.path(), today()).await.unwrap(), None);
+        assert_eq!(
+            sync(&client, origin.as_str(), dir.path(), today())
+                .await
+                .unwrap(),
+            None
+        );
         assert_eq!(count.load(Ordering::SeqCst), 0);
     }
 
@@ -317,9 +347,15 @@ mod tests {
             "/doodle?app=oss" => redirect("/doodle/a.png?app=oss"),
             "/doodle/a.png?app=oss" => response("200 OK", &png(512, 512)),
             _ => panic!("unexpected path: {path}"),
-        }).await;
+        })
+        .await;
         let icon = dir.path().join(ICON_FILE);
-        assert_eq!(sync(&client(&origin), origin.as_str(), dir.path(), today()).await.unwrap(), Some(icon.clone()));
+        assert_eq!(
+            sync(&client(&origin), origin.as_str(), dir.path(), today())
+                .await
+                .unwrap(),
+            Some(icon.clone())
+        );
         assert_eq!(tokio::fs::read(icon).await.unwrap(), png(512, 512));
         assert_date_saved(dir.path()).await;
         assert_eq!(count.load(Ordering::SeqCst), 2);
@@ -330,8 +366,15 @@ mod tests {
         for body in [b"<svg/>".to_vec(), png(513, 10)] {
             let dir = tempfile::tempdir().unwrap();
             let (origin, count) = server(move |_| response("200 OK", &body)).await;
-            assert_eq!(sync(&client(&origin), origin.as_str(), dir.path(), today()).await.unwrap(), None);
-            assert!(!tokio::fs::try_exists(dir.path().join(ICON_FILE)).await.unwrap());
+            assert_eq!(
+                sync(&client(&origin), origin.as_str(), dir.path(), today())
+                    .await
+                    .unwrap(),
+                None
+            );
+            assert!(!tokio::fs::try_exists(dir.path().join(ICON_FILE))
+                .await
+                .unwrap());
             assert_date_saved(dir.path()).await;
             assert_eq!(count.load(Ordering::SeqCst), 1);
         }
@@ -346,9 +389,17 @@ mod tests {
             body.resize(300 * 1024, 0);
             bytes.extend_from_slice(&body);
             bytes
-        }).await;
-        assert_eq!(sync(&client(&origin), origin.as_str(), dir.path(), today()).await.unwrap(), None);
-        assert!(!tokio::fs::try_exists(dir.path().join(ICON_FILE)).await.unwrap());
+        })
+        .await;
+        assert_eq!(
+            sync(&client(&origin), origin.as_str(), dir.path(), today())
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(!tokio::fs::try_exists(dir.path().join(ICON_FILE))
+            .await
+            .unwrap());
         assert_date_saved(dir.path()).await;
     }
 
@@ -362,7 +413,12 @@ mod tests {
         let task = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             read_request(&mut socket).await;
-            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10000000\r\nConnection: close\r\n\r\n").await.unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 10000000\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
             let mut body = png(1, 1);
             body.resize(300 * 1024, 0);
             let _ = socket.write_all(&body).await;
@@ -373,10 +429,18 @@ mod tests {
         let result = tokio::time::timeout(
             Duration::from_secs(5),
             sync(&client, origin.as_str(), dir.path(), today()),
-        ).await;
+        )
+        .await;
         task.abort();
-        assert_eq!(result.expect("must stop reading at the byte limit").unwrap(), None);
-        assert!(!tokio::fs::try_exists(dir.path().join(ICON_FILE)).await.unwrap());
+        assert_eq!(
+            result
+                .expect("must stop reading at the byte limit")
+                .unwrap(),
+            None
+        );
+        assert!(!tokio::fs::try_exists(dir.path().join(ICON_FILE))
+            .await
+            .unwrap());
         assert_date_saved(dir.path()).await;
     }
 
@@ -386,9 +450,16 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let icon = dir.path().join(ICON_FILE);
             tokio::fs::write(&icon, png(1, 1)).await.unwrap();
-            tokio::fs::write(dir.path().join(LAST_CHECK_FILE), "2026-11-08").await.unwrap();
+            tokio::fs::write(dir.path().join(LAST_CHECK_FILE), "2026-11-08")
+                .await
+                .unwrap();
             let (origin, count) = server(move |_| response(status, b"")).await;
-            assert_eq!(sync(&client(&origin), origin.as_str(), dir.path(), today()).await.unwrap(), None);
+            assert_eq!(
+                sync(&client(&origin), origin.as_str(), dir.path(), today())
+                    .await
+                    .unwrap(),
+                None
+            );
             assert!(!tokio::fs::try_exists(icon).await.unwrap());
             assert_date_saved(dir.path()).await;
             assert_eq!(count.load(Ordering::SeqCst), 1);
@@ -404,9 +475,16 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let origin = Url::parse(&format!("http://{addr}/doodle?app=oss")).unwrap();
         drop(listener);
-        assert_eq!(sync(&client(&origin), origin.as_str(), dir.path(), today()).await.unwrap(), None);
+        assert_eq!(
+            sync(&client(&origin), origin.as_str(), dir.path(), today())
+                .await
+                .unwrap(),
+            None
+        );
         assert!(!tokio::fs::try_exists(icon).await.unwrap());
-        assert!(!tokio::fs::try_exists(dir.path().join(LAST_CHECK_FILE)).await.unwrap());
+        assert!(!tokio::fs::try_exists(dir.path().join(LAST_CHECK_FILE))
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -424,7 +502,8 @@ mod tests {
                     images.fetch_add(1, Ordering::SeqCst);
                     response("200 OK", &png(1, 1))
                 }
-            }).await;
+            })
+            .await;
             let mut next = origin.clone();
             if different_host {
                 next.set_host(Some("localhost")).unwrap();
@@ -433,7 +512,12 @@ mod tests {
                 next.set_path("/other/a.png");
             }
             location.set(next.to_string()).unwrap();
-            assert_eq!(sync(&client(&origin), origin.as_str(), dir.path(), today()).await.unwrap(), None);
+            assert_eq!(
+                sync(&client(&origin), origin.as_str(), dir.path(), today())
+                    .await
+                    .unwrap(),
+                None
+            );
             assert_date_saved(dir.path()).await;
             assert_eq!(count.load(Ordering::SeqCst), 1);
             assert_eq!(image_requests.load(Ordering::SeqCst), 0);
@@ -454,8 +538,14 @@ mod tests {
                 response("200 OK", &png(1, 1))
             }
             _ => panic!("unexpected path: {path}"),
-        }).await;
-        assert_eq!(sync(&client(&origin), origin.as_str(), dir.path(), today()).await.unwrap(), None);
+        })
+        .await;
+        assert_eq!(
+            sync(&client(&origin), origin.as_str(), dir.path(), today())
+                .await
+                .unwrap(),
+            None
+        );
         assert_date_saved(dir.path()).await;
         assert_eq!(count.load(Ordering::SeqCst), 3);
         assert_eq!(image_requests.load(Ordering::SeqCst), 0);
@@ -469,9 +559,15 @@ mod tests {
             "/doodle/a?app=oss" => redirect("/doodle/b.png?app=oss"),
             "/doodle/b.png?app=oss" => response("200 OK", &png(1, 1)),
             _ => panic!("unexpected path: {path}"),
-        }).await;
+        })
+        .await;
         let icon = dir.path().join(ICON_FILE);
-        assert_eq!(sync(&client(&origin), origin.as_str(), dir.path(), today()).await.unwrap(), Some(icon.clone()));
+        assert_eq!(
+            sync(&client(&origin), origin.as_str(), dir.path(), today())
+                .await
+                .unwrap(),
+            Some(icon.clone())
+        );
         assert_eq!(tokio::fs::read(icon).await.unwrap(), png(1, 1));
         assert_date_saved(dir.path()).await;
         assert_eq!(count.load(Ordering::SeqCst), 3);
@@ -496,10 +592,18 @@ mod tests {
     #[tokio::test]
     async fn rename_failure_cleans_temporary_file_and_does_not_save_date() {
         let dir = tempfile::tempdir().unwrap();
-        tokio::fs::create_dir(dir.path().join(ICON_FILE)).await.unwrap();
+        tokio::fs::create_dir(dir.path().join(ICON_FILE))
+            .await
+            .unwrap();
         let (origin, _) = server(|_| response("200 OK", &png(1, 1))).await;
-        assert!(sync(&client(&origin), origin.as_str(), dir.path(), today()).await.is_err());
-        assert!(!tokio::fs::try_exists(dir.path().join(TMP_FILE)).await.unwrap());
-        assert!(!tokio::fs::try_exists(dir.path().join(LAST_CHECK_FILE)).await.unwrap());
+        assert!(sync(&client(&origin), origin.as_str(), dir.path(), today())
+            .await
+            .is_err());
+        assert!(!tokio::fs::try_exists(dir.path().join(TMP_FILE))
+            .await
+            .unwrap());
+        assert!(!tokio::fs::try_exists(dir.path().join(LAST_CHECK_FILE))
+            .await
+            .unwrap());
     }
 }

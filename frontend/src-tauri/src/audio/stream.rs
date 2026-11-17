@@ -1,14 +1,14 @@
-use std::sync::Arc;
 use anyhow::Result;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, Stream, SupportedStreamConfig};
 use log::{error, info, warn};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use super::devices::{AudioDevice, get_device_and_config};
+use super::capture::{get_current_backend, AudioCaptureBackend};
+use super::devices::{get_device_and_config, AudioDevice};
 use super::pipeline::AudioCapture;
-use super::recording_state::{RecordingState, DeviceType};
-use super::capture::{AudioCaptureBackend, get_current_backend};
+use super::recording_state::{DeviceType, RecordingState};
 
 #[cfg(target_os = "macos")]
 use super::capture::CoreAudioCapture;
@@ -84,34 +84,41 @@ impl AudioStream {
         recording_sender: Option<mpsc::UnboundedSender<super::recording_state::AudioChunk>>,
         backend_type: AudioCaptureBackend,
     ) -> Result<Self> {
-        info!("🎵 Stream: Creating audio stream for device: {} with backend: {:?}, device_type: {:?}",
-              device.name, backend_type, device_type);
+        info!(
+            "🎵 Stream: Creating audio stream for device: {} with backend: {:?}, device_type: {:?}",
+            device.name, backend_type, device_type
+        );
 
         // For system audio devices, use the selected backend.
         // For microphone devices, prefer CPAL, except on Linux where we first
         // try the native PulseAudio/PipeWire source path (see below).
         #[cfg(target_os = "macos")]
-        let use_core_audio = device_type == DeviceType::System
-            && backend_type == AudioCaptureBackend::CoreAudio;
+        let use_core_audio =
+            device_type == DeviceType::System && backend_type == AudioCaptureBackend::CoreAudio;
 
         #[cfg(not(target_os = "macos"))]
         let use_core_audio = false;
 
         #[cfg(target_os = "macos")]
-        info!("🎵 Stream: use_core_audio = {}, device_type == System: {}, backend == CoreAudio: {}",
-              use_core_audio,
-              device_type == DeviceType::System,
-              backend_type == AudioCaptureBackend::CoreAudio);
+        info!(
+            "🎵 Stream: use_core_audio = {}, device_type == System: {}, backend == CoreAudio: {}",
+            use_core_audio,
+            device_type == DeviceType::System,
+            backend_type == AudioCaptureBackend::CoreAudio
+        );
 
         #[cfg(not(target_os = "macos"))]
-        info!("🎵 Stream: use_core_audio = {}, device_type == System: {}",
-              use_core_audio,
-              device_type == DeviceType::System);
+        info!(
+            "🎵 Stream: use_core_audio = {}, device_type == System: {}",
+            use_core_audio,
+            device_type == DeviceType::System
+        );
 
         #[cfg(target_os = "macos")]
         if use_core_audio {
             info!("🎵 Stream: Using Core Audio backend (cidre) for system audio");
-            return Self::create_core_audio_stream(device, state, device_type, recording_sender).await;
+            return Self::create_core_audio_stream(device, state, device_type, recording_sender)
+                .await;
         }
 
         // Linux system audio always goes through the native PipeWire/PulseAudio
@@ -121,7 +128,8 @@ impl AudioStream {
         #[cfg(target_os = "linux")]
         if device_type == DeviceType::System {
             info!("🎵 Stream: Using native PulseAudio/PipeWire backend for system audio");
-            return Self::create_pulse_stream(device, state, device_type, recording_sender, true).await;
+            return Self::create_pulse_stream(device, state, device_type, recording_sender, true)
+                .await;
         }
 
         // Linux microphones are identified by their exact PulseAudio source
@@ -160,7 +168,10 @@ impl AudioStream {
         #[cfg(not(target_os = "macos"))]
         let backend_name = "CPAL";
 
-        info!("🎵 Stream: Using CPAL backend ({}) for device: {}", backend_name, device.name);
+        info!(
+            "🎵 Stream: Using CPAL backend ({}) for device: {}",
+            backend_name, device.name
+        );
         Self::create_cpal_stream(device, state, device_type, recording_sender).await
     }
 
@@ -176,8 +187,12 @@ impl AudioStream {
         // Get the underlying cpal device and config
         let (cpal_device, config) = get_device_and_config(&device).await?;
 
-        info!("Audio config - Sample rate: {}, Channels: {}, Format: {:?}",
-              config.sample_rate().0, config.channels(), config.sample_format());
+        info!(
+            "Audio config - Sample rate: {}, Channels: {}, Format: {:?}",
+            config.sample_rate().0,
+            config.channels(),
+            config.sample_format()
+        );
 
         // Create audio capture processor
         let capture = AudioCapture::new(
@@ -212,25 +227,29 @@ impl AudioStream {
         device_type: DeviceType,
         recording_sender: Option<mpsc::UnboundedSender<super::recording_state::AudioChunk>>,
     ) -> Result<Self> {
-        info!("🔊 Stream: Creating Core Audio stream for device: {}", device.name);
+        info!(
+            "🔊 Stream: Creating Core Audio stream for device: {}",
+            device.name
+        );
 
         // Create Core Audio capture
         info!("🔊 Stream: Calling CoreAudioCapture::new()...");
-        let capture_impl = CoreAudioCapture::new()
-            .map_err(|e| {
-                error!("❌ Stream: CoreAudioCapture::new() failed: {}", e);
-                anyhow::anyhow!("Failed to create Core Audio capture: {}", e)
-            })?;
+        let capture_impl = CoreAudioCapture::new().map_err(|e| {
+            error!("❌ Stream: CoreAudioCapture::new() failed: {}", e);
+            anyhow::anyhow!("Failed to create Core Audio capture: {}", e)
+        })?;
 
         info!("✅ Stream: CoreAudioCapture created, calling stream()...");
-        let core_stream = capture_impl.stream()
-            .map_err(|e| {
-                error!("❌ Stream: capture_impl.stream() failed: {}", e);
-                anyhow::anyhow!("Failed to create Core Audio stream: {}", e)
-            })?;
+        let core_stream = capture_impl.stream().map_err(|e| {
+            error!("❌ Stream: capture_impl.stream() failed: {}", e);
+            anyhow::anyhow!("Failed to create Core Audio stream: {}", e)
+        })?;
 
         let sample_rate = core_stream.sample_rate();
-        info!("✅ Stream: Core Audio stream created with sample rate: {} Hz", sample_rate);
+        info!(
+            "✅ Stream: Core Audio stream created with sample rate: {} Hz",
+            sample_rate
+        );
 
         // Create audio capture processor for pipeline integration
         // CRITICAL: Core Audio tap is MONO (with_mono_global_tap_excluding_processes)
@@ -258,7 +277,10 @@ impl AudioStream {
                 let mut frame_count = 0;
                 let frames_per_chunk = 1024; // Process in chunks of 1024 samples
 
-                info!("✅ Stream: Core Audio processing task started for {}", device_name);
+                info!(
+                    "✅ Stream: Core Audio processing task started for {}",
+                    device_name
+                );
 
                 let mut _sample_count = 0u64;
                 while let Some(sample) = stream.next().await {
@@ -283,17 +305,21 @@ impl AudioStream {
                     capture.process_audio_data(&buffer);
                 }
 
-                info!("⚠️ Stream: Core Audio processing task ended for {}", device_name);
+                info!(
+                    "⚠️ Stream: Core Audio processing task ended for {}",
+                    device_name
+                );
             }
         });
 
-        info!("✅ Stream: Core Audio stream fully initialized for device: {}", device.name);
+        info!(
+            "✅ Stream: Core Audio stream fully initialized for device: {}",
+            device.name
+        );
 
         Ok(Self {
             device: device.clone(),
-            backend: StreamBackend::CoreAudio {
-                task: Some(task),
-            },
+            backend: StreamBackend::CoreAudio { task: Some(task) },
         })
     }
 
@@ -306,7 +332,10 @@ impl AudioStream {
         recording_sender: Option<mpsc::UnboundedSender<super::recording_state::AudioChunk>>,
         delivering: bool,
     ) -> Result<Self> {
-        info!("🔊 Stream: Creating PulseAudio stream for device: {}", device.name);
+        info!(
+            "🔊 Stream: Creating PulseAudio stream for device: {}",
+            device.name
+        );
 
         let name = device.name.clone();
         let sink = linux_device_query(move || find_sink_by_name(&name)).await?;
@@ -338,24 +367,46 @@ impl AudioStream {
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         let device_name = device.name.clone();
         let task = tokio::task::spawn_blocking(move || {
-            info!("✅ Stream: PulseAudio capture thread started for {}", device_name);
+            info!(
+                "✅ Stream: PulseAudio capture thread started for {}",
+                device_name
+            );
             let epoch = std::cell::Cell::new(0.0);
-            if let Err(e) = capture_impl.run_timed_ready(|samples, first_frame| {
-                if worker_delivery.load(std::sync::atomic::Ordering::Acquire) && !state.is_paused() {
-                    let timestamp = linux_sample_timestamp(epoch.get(), first_frame, state.get_total_pause_duration());
-                    capture.process_audio_data_at(samples, timestamp);
-                }
-            }, || {
-                epoch.set(state.get_recording_duration().unwrap_or(0.0));
-                let _ = ready_tx.send(());
-            }) {
+            if let Err(e) = capture_impl.run_timed_ready(
+                |samples, first_frame| {
+                    if worker_delivery.load(std::sync::atomic::Ordering::Acquire)
+                        && !state.is_paused()
+                    {
+                        let timestamp = linux_sample_timestamp(
+                            epoch.get(),
+                            first_frame,
+                            state.get_total_pause_duration(),
+                        );
+                        capture.process_audio_data_at(samples, timestamp);
+                    }
+                },
+                || {
+                    epoch.set(state.get_recording_duration().unwrap_or(0.0));
+                    let _ = ready_tx.send(());
+                },
+            ) {
                 warn!("Linux capture failed: {}", e);
                 *worker_error_out.lock().unwrap() = Some(e.to_string());
-                if !state.capture_cancel.lock().unwrap().load(std::sync::atomic::Ordering::Acquire) {
-                    state.report_error(super::recording_state::AudioError::LinuxCapture(e.to_string()));
+                if !state
+                    .capture_cancel
+                    .lock()
+                    .unwrap()
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    state.report_error(super::recording_state::AudioError::LinuxCapture(
+                        e.to_string(),
+                    ));
                 }
             }
-            info!("⚠️ Stream: PulseAudio capture thread ended for {}", device_name);
+            info!(
+                "⚠️ Stream: PulseAudio capture thread ended for {}",
+                device_name
+            );
         });
 
         let mut ready_rx = ready_rx;
@@ -377,7 +428,10 @@ impl AudioStream {
                 }
             }
         }
-        info!("✅ Stream: PulseAudio stream fully initialized for device: {}", device.name);
+        info!(
+            "✅ Stream: PulseAudio stream fully initialized for device: {}",
+            device.name
+        );
 
         Ok(Self {
             device: device.clone(),
@@ -440,19 +494,35 @@ impl AudioStream {
                 device_name
             );
             let epoch = std::cell::Cell::new(0.0);
-            if let Err(e) = capture_impl.run_timed_ready(|samples, first_frame| {
-                if worker_delivery.load(std::sync::atomic::Ordering::Acquire) && !state.is_paused() {
-                    let timestamp = linux_sample_timestamp(epoch.get(), first_frame, state.get_total_pause_duration());
-                    capture.process_audio_data_at(samples, timestamp);
-                }
-            }, || {
-                epoch.set(state.get_recording_duration().unwrap_or(0.0));
-                let _ = ready_tx.send(());
-            }) {
+            if let Err(e) = capture_impl.run_timed_ready(
+                |samples, first_frame| {
+                    if worker_delivery.load(std::sync::atomic::Ordering::Acquire)
+                        && !state.is_paused()
+                    {
+                        let timestamp = linux_sample_timestamp(
+                            epoch.get(),
+                            first_frame,
+                            state.get_total_pause_duration(),
+                        );
+                        capture.process_audio_data_at(samples, timestamp);
+                    }
+                },
+                || {
+                    epoch.set(state.get_recording_duration().unwrap_or(0.0));
+                    let _ = ready_tx.send(());
+                },
+            ) {
                 warn!("Linux capture failed: {}", e);
                 *worker_error_out.lock().unwrap() = Some(e.to_string());
-                if !state.capture_cancel.lock().unwrap().load(std::sync::atomic::Ordering::Acquire) {
-                    state.report_error(super::recording_state::AudioError::LinuxCapture(e.to_string()));
+                if !state
+                    .capture_cancel
+                    .lock()
+                    .unwrap()
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    state.report_error(super::recording_state::AudioError::LinuxCapture(
+                        e.to_string(),
+                    ));
                 }
             }
             info!(
@@ -524,7 +594,8 @@ impl AudioStream {
                 device.build_input_stream(
                     &config_copy.into(),
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        let f32_data: Vec<f32> = data.iter()
+                        let f32_data: Vec<f32> = data
+                            .iter()
                             .map(|&sample| sample as f32 / i16::MAX as f32)
                             .collect();
                         capture.process_audio_data(&f32_data);
@@ -540,7 +611,8 @@ impl AudioStream {
                 device.build_input_stream(
                     &config_copy.into(),
                     move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                        let f32_data: Vec<f32> = data.iter()
+                        let f32_data: Vec<f32> = data
+                            .iter()
                             .map(|&sample| sample as f32 / i32::MAX as f32)
                             .collect();
                         capture.process_audio_data(&f32_data);
@@ -556,7 +628,8 @@ impl AudioStream {
                 device.build_input_stream(
                     &config_copy.into(),
                     move |data: &[i8], _: &cpal::InputCallbackInfo| {
-                        let f32_data: Vec<f32> = data.iter()
+                        let f32_data: Vec<f32> = data
+                            .iter()
                             .map(|&sample| sample as f32 / i8::MAX as f32)
                             .collect();
                         capture.process_audio_data(&f32_data);
@@ -568,7 +641,10 @@ impl AudioStream {
                 )?
             }
             _ => {
-                return Err(anyhow::anyhow!("Unsupported sample format: {:?}", config.sample_format()));
+                return Err(anyhow::anyhow!(
+                    "Unsupported sample format: {:?}",
+                    config.sample_format()
+                ));
             }
         };
 
@@ -578,25 +654,45 @@ impl AudioStream {
     #[cfg(target_os = "linux")]
     pub fn has_ended(&self) -> bool {
         match &self.backend {
-            StreamBackend::Pulse { task, .. } => task.as_ref().map_or(true, |task| task.is_finished()),
+            StreamBackend::Pulse { task, .. } => {
+                task.as_ref().map_or(true, |task| task.is_finished())
+            }
             _ => false,
         }
     }
 
     #[cfg(target_os = "linux")]
-    pub async fn prepare_linux(device: Arc<AudioDevice>, state: Arc<RecordingState>, role: DeviceType) -> Result<Self> {
-        if role == DeviceType::System { Self::create_pulse_stream(device, state, role, None, false).await }
-        else { Self::create_pulse_mic_stream(device, state, role, None, false).await }
+    pub async fn prepare_linux(
+        device: Arc<AudioDevice>,
+        state: Arc<RecordingState>,
+        role: DeviceType,
+    ) -> Result<Self> {
+        if role == DeviceType::System {
+            Self::create_pulse_stream(device, state, role, None, false).await
+        } else {
+            Self::create_pulse_mic_stream(device, state, role, None, false).await
+        }
     }
     #[cfg(target_os = "linux")]
     pub fn set_delivery(&self, enabled: bool) {
-        if let Some(delivery) = &self.delivery { delivery.store(enabled, std::sync::atomic::Ordering::Release); }
+        if let Some(delivery) = &self.delivery {
+            delivery.store(enabled, std::sync::atomic::Ordering::Release);
+        }
     }
 
     #[cfg(target_os = "linux")]
     pub(super) fn request_finish(&self) {
-        if let StreamBackend::Pulse { should_finish, should_stop, .. } = &self.backend {
-            if self.delivery.as_ref().is_some_and(|enabled| enabled.load(std::sync::atomic::Ordering::Acquire)) {
+        if let StreamBackend::Pulse {
+            should_finish,
+            should_stop,
+            ..
+        } = &self.backend
+        {
+            if self
+                .delivery
+                .as_ref()
+                .is_some_and(|enabled| enabled.load(std::sync::atomic::Ordering::Acquire))
+            {
                 should_finish.store(true, std::sync::atomic::Ordering::Release);
             } else {
                 should_stop.store(true, std::sync::atomic::Ordering::Release);
@@ -656,12 +752,16 @@ impl AudioStream {
                 }
             }
             #[cfg(target_os = "linux")]
-            StreamBackend::Pulse { task, worker_error, .. } => {
+            StreamBackend::Pulse {
+                task, worker_error, ..
+            } => {
                 // The nonblocking worker checks this flag between mainloop
                 // iterations. Join it before releasing pipeline resources.
                 info!("Signalling PulseAudio capture thread to stop...");
                 if let Some(task_handle) = task {
-                    task_handle.await.map_err(|e| anyhow::anyhow!("Audio worker failed: {}", e))?;
+                    task_handle
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Audio worker failed: {}", e))?;
                 }
                 if let Some(error) = worker_error.lock().unwrap().as_ref() {
                     return Err(anyhow::anyhow!(error.clone()));
@@ -704,7 +804,8 @@ impl AudioStreamManager {
     ) -> Result<()> {
         self.start_streams_with(microphone_device, system_device, |device, state, role| {
             AudioStream::create(device, state, role, recording_sender.clone())
-        }).await
+        })
+        .await
     }
 
     async fn start_streams_with<F, Fut>(
@@ -723,8 +824,17 @@ impl AudioStreamManager {
 
         // Start microphone stream
         if let Some(mic_device) = microphone_device {
-            info!("🎤 Creating microphone stream: {} (always uses CPAL)", mic_device.name);
-            match create(mic_device.clone(), self.state.clone(), DeviceType::Microphone).await {
+            info!(
+                "🎤 Creating microphone stream: {} (always uses CPAL)",
+                mic_device.name
+            );
+            match create(
+                mic_device.clone(),
+                self.state.clone(),
+                DeviceType::Microphone,
+            )
+            .await
+            {
                 Ok(stream) => {
                     self.state.set_microphone_device(mic_device);
                     self.microphone_stream = Some(stream);
@@ -741,7 +851,10 @@ impl AudioStreamManager {
 
         // Start system audio stream
         if let Some(sys_device) = system_device {
-            info!("🔊 Creating system audio stream: {} (backend: {:?})", sys_device.name, backend);
+            info!(
+                "🔊 Creating system audio stream: {} (backend: {:?})",
+                sys_device.name, backend
+            );
             match create(sys_device.clone(), self.state.clone(), DeviceType::System).await {
                 Ok(stream) => {
                     self.state.set_system_device(sys_device);
@@ -754,7 +867,12 @@ impl AudioStreamManager {
                     #[cfg(target_os = "linux")]
                     {
                         let message = e.to_string();
-                        let cancelled = self.state.capture_cancel.lock().unwrap().load(std::sync::atomic::Ordering::Acquire);
+                        let cancelled = self
+                            .state
+                            .capture_cancel
+                            .lock()
+                            .unwrap()
+                            .load(std::sync::atomic::Ordering::Acquire);
                         // Worker failures before readiness were already reported with the same text.
                         let already_reported = matches!(
                             self.state.get_last_error(),
@@ -783,14 +901,21 @@ impl AudioStreamManager {
 
     #[cfg(target_os = "linux")]
     pub(super) fn request_finish(&self) {
-        for stream in [&self.microphone_stream, &self.system_stream].into_iter().flatten() {
+        for stream in [&self.microphone_stream, &self.system_stream]
+            .into_iter()
+            .flatten()
+        {
             stream.request_finish();
         }
     }
 
     #[cfg(target_os = "linux")]
     pub(super) fn finish_role(&self, microphone: bool) -> bool {
-        let stream = if microphone { &self.microphone_stream } else { &self.system_stream };
+        let stream = if microphone {
+            &self.microphone_stream
+        } else {
+            &self.system_stream
+        };
         stream.as_ref().map_or(true, |stream| {
             stream.request_finish();
             !matches!(&stream.backend, StreamBackend::Pulse { .. }) || stream.has_ended()
@@ -805,7 +930,10 @@ impl AudioStreamManager {
         if self.state.is_recording() {
             self.request_finish();
         } else {
-            for stream in [&self.microphone_stream, &self.system_stream].into_iter().flatten() {
+            for stream in [&self.microphone_stream, &self.system_stream]
+                .into_iter()
+                .flatten()
+            {
                 stream.signal_stop_only();
             }
         }
@@ -848,13 +976,21 @@ impl AudioStreamManager {
     }
 
     #[cfg(target_os = "linux")]
-    pub fn take_system_stream(&mut self) -> Option<AudioStream> { self.system_stream.take() }
+    pub fn take_system_stream(&mut self) -> Option<AudioStream> {
+        self.system_stream.take()
+    }
     #[cfg(target_os = "linux")]
-    pub fn set_system_stream(&mut self, stream: AudioStream) { self.system_stream = Some(stream); }
+    pub fn set_system_stream(&mut self, stream: AudioStream) {
+        self.system_stream = Some(stream);
+    }
 
     #[cfg(target_os = "linux")]
     pub(super) fn linux_stream_kind(&self, microphone: bool) -> Option<LinuxStreamKind> {
-        let stream = if microphone { &self.microphone_stream } else { &self.system_stream };
+        let stream = if microphone {
+            &self.microphone_stream
+        } else {
+            &self.system_stream
+        };
         stream.as_ref().map(|stream| match &stream.backend {
             StreamBackend::Pulse { .. } => LinuxStreamKind::Pulse,
             StreamBackend::Cpal(_) => LinuxStreamKind::Cpal,
@@ -863,7 +999,11 @@ impl AudioStreamManager {
 
     #[cfg(target_os = "linux")]
     pub fn has_working_stream(&self, microphone: bool) -> bool {
-        let stream = if microphone { &self.microphone_stream } else { &self.system_stream };
+        let stream = if microphone {
+            &self.microphone_stream
+        } else {
+            &self.system_stream
+        };
         stream.as_ref().is_some_and(|stream| !stream.has_ended())
     }
 
@@ -921,7 +1061,9 @@ mod linux_startup_tests {
 
     fn stream(device: Arc<AudioDevice>) -> AudioStream {
         let mut stream = super::linux_clock_tests::test_stream(
-            &device.name, Arc::new(AtomicBool::new(false)), tokio::spawn(async {}),
+            &device.name,
+            Arc::new(AtomicBool::new(false)),
+            tokio::spawn(async {}),
         );
         stream.device = device;
         stream
@@ -932,29 +1074,37 @@ mod linux_startup_tests {
         let state = RecordingState::new();
         let mut manager = AudioStreamManager::new(state.clone());
         let mut calls = Vec::new();
-        let result = manager.start_streams_with(
-            Some(device("mic", super::super::devices::DeviceType::Input)),
-            Some(device("system", super::super::devices::DeviceType::Output)),
-            |device, _, role| {
-                calls.push(role.clone());
-                std::future::ready(if role == DeviceType::Microphone {
-                    Err(anyhow::anyhow!("microphone readiness failed"))
-                } else {
-                    Ok(stream(device))
-                })
-            },
-        ).await;
-        assert_eq!(result.unwrap_err().to_string(), "microphone readiness failed");
+        let result = manager
+            .start_streams_with(
+                Some(device("mic", super::super::devices::DeviceType::Input)),
+                Some(device("system", super::super::devices::DeviceType::Output)),
+                |device, _, role| {
+                    calls.push(role.clone());
+                    std::future::ready(if role == DeviceType::Microphone {
+                        Err(anyhow::anyhow!("microphone readiness failed"))
+                    } else {
+                        Ok(stream(device))
+                    })
+                },
+            )
+            .await;
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "microphone readiness failed"
+        );
         assert_eq!(calls, vec![DeviceType::Microphone]);
         assert_eq!(manager.active_stream_count(), 0);
         assert!(state.get_microphone_device().is_none());
         assert!(state.get_system_device().is_none());
 
-        manager.start_streams_with(
-            Some(device("mic", super::super::devices::DeviceType::Input)),
-            Some(device("system", super::super::devices::DeviceType::Output)),
-            |device, _, _| std::future::ready(Ok(stream(device))),
-        ).await.unwrap();
+        manager
+            .start_streams_with(
+                Some(device("mic", super::super::devices::DeviceType::Input)),
+                Some(device("system", super::super::devices::DeviceType::Output)),
+                |device, _, _| std::future::ready(Ok(stream(device))),
+            )
+            .await
+            .unwrap();
         assert_eq!(manager.active_stream_count(), 2);
         assert_eq!(state.get_microphone_device().unwrap().name, "mic");
         manager.stop_streams().await.unwrap();
@@ -965,10 +1115,13 @@ mod linux_startup_tests {
         let state = RecordingState::new();
         let mut manager = AudioStreamManager::new(state.clone());
         let system = device("system", super::super::devices::DeviceType::Output);
-        manager.start_streams_with(None, Some(system.clone()), |device, _, role| {
-            assert_eq!(role, DeviceType::System);
-            std::future::ready(Ok(stream(device)))
-        }).await.unwrap();
+        manager
+            .start_streams_with(None, Some(system.clone()), |device, _, role| {
+                assert_eq!(role, DeviceType::System);
+                std::future::ready(Ok(stream(device)))
+            })
+            .await
+            .unwrap();
         assert_eq!(manager.active_stream_count(), 1);
         assert!(state.get_microphone_device().is_none());
         assert_eq!(state.get_system_device().unwrap().name, system.name);
@@ -979,15 +1132,20 @@ mod linux_startup_tests {
     async fn system_failure_still_allows_microphone_only_startup() {
         let state = RecordingState::new();
         let mut manager = AudioStreamManager::new(state.clone());
-        manager.start_streams_with(
-            Some(device("mic", super::super::devices::DeviceType::Input)),
-            Some(device("system", super::super::devices::DeviceType::Output)),
-            |device, _, role| std::future::ready(if role == DeviceType::System {
-                Err(anyhow::anyhow!("system unavailable"))
-            } else {
-                Ok(stream(device))
-            }),
-        ).await.unwrap();
+        manager
+            .start_streams_with(
+                Some(device("mic", super::super::devices::DeviceType::Input)),
+                Some(device("system", super::super::devices::DeviceType::Output)),
+                |device, _, role| {
+                    std::future::ready(if role == DeviceType::System {
+                        Err(anyhow::anyhow!("system unavailable"))
+                    } else {
+                        Ok(stream(device))
+                    })
+                },
+            )
+            .await
+            .unwrap();
         assert_eq!(manager.active_stream_count(), 1);
         assert_eq!(state.get_microphone_device().unwrap().name, "mic");
         assert!(state.get_system_device().is_none());
@@ -998,11 +1156,14 @@ mod linux_startup_tests {
     async fn both_successful_roles_are_installed() {
         let state = RecordingState::new();
         let mut manager = AudioStreamManager::new(state.clone());
-        manager.start_streams_with(
-            Some(device("mic", super::super::devices::DeviceType::Input)),
-            Some(device("system", super::super::devices::DeviceType::Output)),
-            |device, _, _| std::future::ready(Ok(stream(device))),
-        ).await.unwrap();
+        manager
+            .start_streams_with(
+                Some(device("mic", super::super::devices::DeviceType::Input)),
+                Some(device("system", super::super::devices::DeviceType::Output)),
+                |device, _, _| std::future::ready(Ok(stream(device))),
+            )
+            .await
+            .unwrap();
         assert_eq!(manager.active_stream_count(), 2);
         assert_eq!(state.get_microphone_device().unwrap().name, "mic");
         assert_eq!(state.get_system_device().unwrap().name, "system");
@@ -1010,15 +1171,20 @@ mod linux_startup_tests {
     }
 
     async fn start_with_failing_system(manager: &mut AudioStreamManager) {
-        manager.start_streams_with(
-            Some(device("mic", super::super::devices::DeviceType::Input)),
-            Some(device("system", super::super::devices::DeviceType::Output)),
-            |device, _, role| std::future::ready(if role == DeviceType::System {
-                Err(anyhow::anyhow!("system unavailable"))
-            } else {
-                Ok(stream(device))
-            }),
-        ).await.unwrap();
+        manager
+            .start_streams_with(
+                Some(device("mic", super::super::devices::DeviceType::Input)),
+                Some(device("system", super::super::devices::DeviceType::Output)),
+                |device, _, role| {
+                    std::future::ready(if role == DeviceType::System {
+                        Err(anyhow::anyhow!("system unavailable"))
+                    } else {
+                        Ok(stream(device))
+                    })
+                },
+            )
+            .await
+            .unwrap();
         assert_eq!(manager.active_stream_count(), 1);
         manager.stop_streams().await.unwrap();
     }
@@ -1037,7 +1203,12 @@ mod linux_startup_tests {
         let state = RecordingState::new();
         let messages = Arc::new(std::sync::Mutex::new(Vec::new()));
         let captured = messages.clone();
-        state.set_error_callback(move |error| captured.lock().unwrap().push(error.user_message().to_string()));
+        state.set_error_callback(move |error| {
+            captured
+                .lock()
+                .unwrap()
+                .push(error.user_message().to_string())
+        });
         start_with_failing_system(&mut AudioStreamManager::new(state.clone())).await;
         let messages = messages.lock().unwrap();
         assert_eq!(messages.len(), 1);
@@ -1048,7 +1219,11 @@ mod linux_startup_tests {
     #[tokio::test]
     async fn cancelled_system_start_does_not_notify() {
         let state = RecordingState::new();
-        state.capture_cancel.lock().unwrap().store(true, std::sync::atomic::Ordering::Release);
+        state
+            .capture_cancel
+            .lock()
+            .unwrap()
+            .store(true, std::sync::atomic::Ordering::Release);
         let count = counting_callback(&state);
         start_with_failing_system(&mut AudioStreamManager::new(state.clone())).await;
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -1058,7 +1233,9 @@ mod linux_startup_tests {
     async fn system_failure_already_reported_by_worker_is_not_repeated() {
         let state = RecordingState::new();
         let count = counting_callback(&state);
-        state.report_error(super::super::recording_state::AudioError::LinuxCapture("system unavailable".into()));
+        state.report_error(super::super::recording_state::AudioError::LinuxCapture(
+            "system unavailable".into(),
+        ));
         start_with_failing_system(&mut AudioStreamManager::new(state.clone())).await;
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
@@ -1068,13 +1245,22 @@ mod linux_startup_tests {
 pub(super) mod linux_clock_tests {
     use super::*;
 
-    pub(crate) fn test_stream(name: &str, finish: Arc<AtomicBool>, task: tokio::task::JoinHandle<()>) -> AudioStream {
+    pub(crate) fn test_stream(
+        name: &str,
+        finish: Arc<AtomicBool>,
+        task: tokio::task::JoinHandle<()>,
+    ) -> AudioStream {
         AudioStream {
-            device: Arc::new(AudioDevice::new(name.into(), super::super::devices::DeviceType::Input)),
+            device: Arc::new(AudioDevice::new(
+                name.into(),
+                super::super::devices::DeviceType::Input,
+            )),
             delivery: Some(Arc::new(AtomicBool::new(true))),
             backend: StreamBackend::Pulse {
-                should_stop: Arc::new(AtomicBool::new(false)), should_finish: finish,
-                worker_error: Arc::new(std::sync::Mutex::new(None)), task: Some(task),
+                should_stop: Arc::new(AtomicBool::new(false)),
+                should_finish: finish,
+                worker_error: Arc::new(std::sync::Mutex::new(None)),
+                task: Some(task),
             },
         }
     }
@@ -1084,9 +1270,14 @@ pub(super) mod linux_clock_tests {
         let mut manager = AudioStreamManager::new(RecordingState::new());
         assert_eq!(manager.linux_stream_kind(true), None);
         let task = tokio::spawn(async {});
-        while !task.is_finished() { tokio::task::yield_now().await; }
+        while !task.is_finished() {
+            tokio::task::yield_now().await;
+        }
         manager.set_mic_stream(test_stream("mic", Arc::new(AtomicBool::new(false)), task));
-        assert_eq!(manager.linux_stream_kind(true), Some(LinuxStreamKind::Pulse));
+        assert_eq!(
+            manager.linux_stream_kind(true),
+            Some(LinuxStreamKind::Pulse)
+        );
         assert!(!manager.has_working_stream(true));
         let stream = manager.take_mic_stream().unwrap();
         assert_eq!(manager.linux_stream_kind(true), None);
@@ -1099,8 +1290,17 @@ pub(super) mod linux_clock_tests {
         state.start_recording().unwrap();
         let (sender, mut receiver) = mpsc::unbounded_channel();
         state.set_audio_sender(sender);
-        let capture = AudioCapture::new(Arc::new(AudioDevice::new("test".into(), super::super::devices::DeviceType::Input)),
-            state.clone(), 48000, 1, DeviceType::System, None);
+        let capture = AudioCapture::new(
+            Arc::new(AudioDevice::new(
+                "test".into(),
+                super::super::devices::DeviceType::Input,
+            )),
+            state.clone(),
+            48000,
+            1,
+            DeviceType::System,
+            None,
+        );
         capture.process_audio_data(&[1.0; 10]);
         state.pause_recording().unwrap();
         capture.process_audio_data(&[3.0; 17]);

@@ -1,7 +1,7 @@
 use crate::api::{TranscriptSearchResult, TranscriptSegment};
 use chrono::Utc;
-use sqlx::{Connection, Error as SqlxError, SqlitePool};
 use log::{error, info};
+use sqlx::{Connection, Error as SqlxError, SqlitePool};
 use uuid::Uuid;
 
 pub struct TranscriptsRepository;
@@ -61,7 +61,10 @@ impl TranscriptsRepository {
             .await;
 
             if let Err(e) = result {
-                error!("Failed to save transcript segment for meeting {}", meeting_id);
+                error!(
+                    "Failed to save transcript segment for meeting {}",
+                    meeting_id
+                );
                 transaction.rollback().await?;
                 return Err(e);
             }

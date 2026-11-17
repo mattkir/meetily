@@ -114,9 +114,10 @@ pub fn parse_shortcut(raw: &str) -> Result<ParsedShortcut, String> {
             "tab" => keycode = Some(48),
             other if other.len() == 1 => {
                 let ch = other.chars().next().unwrap();
-                keycode = Some(keycode_for_char(ch).ok_or_else(|| {
-                    format!("unsupported key in shortcut: {other}")
-                })?);
+                keycode = Some(
+                    keycode_for_char(ch)
+                        .ok_or_else(|| format!("unsupported key in shortcut: {other}"))?,
+                );
             }
             other => {
                 return Err(format!("unsupported shortcut token: {other}"));

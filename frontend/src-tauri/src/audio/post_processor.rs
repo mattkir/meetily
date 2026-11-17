@@ -1,7 +1,7 @@
+use anyhow::Result;
+use log::{error, info, warn};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use anyhow::Result;
-use log::{info, warn, error};
 
 /// Post-processing request for transcript text
 #[derive(Debug, Clone)]
@@ -61,11 +61,17 @@ impl PostProcessor {
                         }
 
                         if processing_time > 100 {
-                            warn!("Slow post-processing for sequence {}: {}ms", request.sequence_id, processing_time);
+                            warn!(
+                                "Slow post-processing for sequence {}: {}ms",
+                                request.sequence_id, processing_time
+                            );
                         }
                     }
                     Err(e) => {
-                        warn!("Post-processing failed for sequence {}: {}", request.sequence_id, e);
+                        warn!(
+                            "Post-processing failed for sequence {}: {}",
+                            request.sequence_id, e
+                        );
                         // Send original text as fallback
                         let response = PostProcessResponse {
                             sequence_id: request.sequence_id,
@@ -194,10 +200,7 @@ fn clean_repetitive_text(text: &str) -> String {
 }
 
 fn remove_artifacts(text: &str) -> String {
-    let mut words: Vec<String> = text
-        .split_whitespace()
-        .map(|w| w.to_string())
-        .collect();
+    let mut words: Vec<String> = text.split_whitespace().map(|w| w.to_string()).collect();
 
     let fillers = [
         "uh", "um", "er", "ah", "oh", "hm", "hmm", "uhh", "umm", "err", "ahh", "ohh",

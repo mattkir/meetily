@@ -129,7 +129,11 @@ mod macos {
         if plist_path.exists() {
             if let Some(uid) = current_uid() {
                 let _ = Command::new("launchctl")
-                    .args(["bootout", &format!("gui/{uid}"), &plist_path.to_string_lossy()])
+                    .args([
+                        "bootout",
+                        &format!("gui/{uid}"),
+                        &plist_path.to_string_lossy(),
+                    ])
                     .output();
             }
             let _ = Command::new("launchctl")
@@ -145,10 +149,6 @@ mod macos {
         if !output.status.success() {
             return None;
         }
-        String::from_utf8(output.stdout)
-            .ok()?
-            .trim()
-            .parse()
-            .ok()
+        String::from_utf8(output.stdout).ok()?.trim().parse().ok()
     }
 }

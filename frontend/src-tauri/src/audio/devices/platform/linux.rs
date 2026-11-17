@@ -35,7 +35,10 @@ pub(crate) static ALSA_GLOBAL_LOCK: Mutex<()> = Mutex::new(());
 /// look like plausible devices. Blacklisting them is endless and still leaves
 /// the list confusing. The whitelist gives a bounded, predictable fallback.
 pub(crate) fn is_useful_alsa_endpoint(name: &str) -> bool {
-    matches!(name.to_lowercase().as_str(), "default" | "pipewire" | "pulse")
+    matches!(
+        name.to_lowercase().as_str(),
+        "default" | "pipewire" | "pulse"
+    )
 }
 
 /// Last seen display label per device ID, so events about a device that has
@@ -222,7 +225,10 @@ pub fn configure_linux_audio(host: &cpal::Host) -> Result<Vec<AudioDevice>> {
         }
         Err(e) if e.is::<PulseListError>() => return Err(e),
         Err(e) => {
-            warn!("Failed to list PulseAudio/PipeWire sinks for System Audio: {}", e);
+            warn!(
+                "Failed to list PulseAudio/PipeWire sinks for System Audio: {}",
+                e
+            );
         }
     }
 
@@ -252,15 +258,20 @@ mod tests {
     #[test]
     fn cached_label_falls_back_to_id_then_serves_remembered_label() {
         assert_eq!(cached_label("cache_test_id"), "cache_test_id");
-        remember_labels(&[AudioDevice::new("cache_test_id".into(), DeviceType::Input)
-            .with_label("Readable".into())]);
+        remember_labels(
+            &[AudioDevice::new("cache_test_id".into(), DeviceType::Input)
+                .with_label("Readable".into())],
+        );
         assert_eq!(cached_label("cache_test_id"), "Readable");
     }
 
     #[test]
     fn unique_labels_are_left_alone() {
         let devices = pulse_source_devices(
-            &[source("alsa_input.a", "Mic A"), source("alsa_input.b", "Mic B")],
+            &[
+                source("alsa_input.a", "Mic A"),
+                source("alsa_input.b", "Mic B"),
+            ],
             None,
         );
         assert_eq!(devices[0].label.as_deref(), Some("Mic A"));
@@ -304,15 +315,14 @@ mod tests {
         );
         let labels = labels_of(&devices);
         assert_distinct(&labels);
-        assert!(labels.iter().all(|l| !l.contains("same)") && !l.contains("a.same")));
+        assert!(labels
+            .iter()
+            .all(|l| !l.contains("same)") && !l.contains("a.same")));
     }
 
     #[test]
     fn generated_label_never_collides_with_another_literal_description() {
-        let probe = pulse_source_devices(
-            &[source("id.1", "Mic"), source("id.2", "Mic")],
-            None,
-        );
+        let probe = pulse_source_devices(&[source("id.1", "Mic"), source("id.2", "Mic")], None);
         let generated = labels_of(&probe);
         for literal in &generated {
             let devices = pulse_source_devices(
@@ -359,10 +369,7 @@ mod tests {
 
     #[test]
     fn ids_and_default_flags_are_untouched_by_labelling() {
-        let devices = pulse_sink_devices(
-            &[sink("s.b", "Same"), sink("s.a", "Same")],
-            Some("s.a"),
-        );
+        let devices = pulse_sink_devices(&[sink("s.b", "Same"), sink("s.a", "Same")], Some("s.a"));
         assert_eq!(devices[0].name, "s.b");
         assert_eq!(devices[1].name, "s.a");
         assert!(!devices[0].is_default && devices[1].is_default);
@@ -404,7 +411,9 @@ mod tests {
 
     #[test]
     fn test_is_useful_alsa_endpoint_keeps_whitelist() {
-        for name in ["default", "pipewire", "pulse", "DEFAULT", "PipeWire", "PULSE"] {
+        for name in [
+            "default", "pipewire", "pulse", "DEFAULT", "PipeWire", "PULSE",
+        ] {
             assert!(
                 is_useful_alsa_endpoint(name),
                 "'{}' should be kept as a useful ALSA endpoint",

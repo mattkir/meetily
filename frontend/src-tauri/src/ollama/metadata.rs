@@ -1,11 +1,11 @@
+use once_cell::sync::Lazy;
+use regex::Regex;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use serde::{Deserialize, Serialize};
-use reqwest::Client;
-use regex::Regex;
-use once_cell::sync::Lazy;
 
 /// Model metadata containing context size and other details
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,9 +76,11 @@ impl ModelMetadataCache {
             if let Some(entry) = cache.get(&cache_key) {
                 // Check if entry is still valid (within TTL)
                 if entry.fetched_at.elapsed() < self.ttl {
-                    log::debug!("Cache hit for model {}: context_size={}",
-                    model_name,
-                    entry.metadata.context_size);
+                    log::debug!(
+                        "Cache hit for model {}: context_size={}",
+                        model_name,
+                        entry.metadata.context_size
+                    );
                     return Ok(entry.metadata.clone());
                 }
             }
@@ -156,9 +158,15 @@ async fn fetch_model_info(
         .await
         .map_err(|e| {
             if e.is_timeout() {
-                format!("Request timed out while fetching metadata for {}", model_name)
+                format!(
+                    "Request timed out while fetching metadata for {}",
+                    model_name
+                )
             } else if e.is_connect() {
-                format!("Cannot connect to {}. Ollama server may not be running.", base_url)
+                format!(
+                    "Cannot connect to {}. Ollama server may not be running.",
+                    base_url
+                )
             } else {
                 format!("Network error: {}", e)
             }
@@ -175,7 +183,8 @@ async fn fetch_model_info(
         .map_err(|e| format!("Failed to parse API response: {}", e))?;
 
     // Try to get context size from model_info (verbose mode) first
-    let mut context_size = extract_context_from_model_info(&show_response.model_info, &show_response.details.family);
+    let mut context_size =
+        extract_context_from_model_info(&show_response.model_info, &show_response.details.family);
 
     // If not found in model_info, try parsing modelfile
     if context_size == ULTIMATE_FALLBACK {
@@ -195,9 +204,11 @@ async fn fetch_model_info(
             .iter()
             .find(|(fam, _)| family.to_lowercase().contains(fam))
         {
-            log::info!("No num_ctx in modelfile for {}, using family-based default: {} tokens",
-            model_name,
-            size);
+            log::info!(
+                "No num_ctx in modelfile for {}, using family-based default: {} tokens",
+                model_name,
+                size
+            );
             context_size = *size;
         }
     }
@@ -252,16 +263,17 @@ fn extract_context_from_model_info(
 /// Context size in tokens, defaults to 4000 if not found
 fn parse_num_ctx_from_modelfile(modelfile: &str) -> usize {
     // Regex to match: PARAMETER num_ctx <number>
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"PARAMETER\s+num_ctx\s+(\d+)").expect("Invalid regex pattern")
-    });
+    static RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"PARAMETER\s+num_ctx\s+(\d+)").expect("Invalid regex pattern"));
 
     RE.captures(modelfile)
         .and_then(|caps| caps.get(1))
         .and_then(|m| m.as_str().parse::<usize>().ok())
         .unwrap_or_else(|| {
-            log::debug!("num_ctx not found in modelfile, using default {}",
-            ULTIMATE_FALLBACK);
+            log::debug!(
+                "num_ctx not found in modelfile, using default {}",
+                ULTIMATE_FALLBACK
+            );
             ULTIMATE_FALLBACK
         })
 }
@@ -291,9 +303,11 @@ fn get_fallback_metadata(model_name: &str) -> ModelMetadata {
         .unwrap_or("unknown")
         .to_string();
 
-    log::warn!("Using fallback metadata for {}: context_size={}",
-    model_name,
-    context_size);
+    log::warn!(
+        "Using fallback metadata for {}: context_size={}",
+        model_name,
+        context_size
+    );
 
     ModelMetadata {
         name: model_name.to_string(),

@@ -61,27 +61,27 @@ pub async fn dictation_start_agent<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn dictation_stop_agent(
-    state: State<'_, DictationState>,
-) -> Result<(), String> {
+pub async fn dictation_stop_agent(state: State<'_, DictationState>) -> Result<(), String> {
     state.stop().await;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn dictation_get_permissions() -> Result<DictationPermissions, String> {
-    Ok(tauri::async_runtime::spawn_blocking(permissions::check_permissions)
-        .await
-        .map_err(|e| e.to_string())?)
+    Ok(
+        tauri::async_runtime::spawn_blocking(permissions::check_permissions)
+            .await
+            .map_err(|e| e.to_string())?,
+    )
 }
 
 #[tauri::command]
 pub async fn dictation_request_accessibility() -> Result<bool, String> {
-    Ok(tauri::async_runtime::spawn_blocking(|| {
-        permissions::request_accessibility_prompt()
-    })
-    .await
-    .map_err(|e| e.to_string())?)
+    Ok(
+        tauri::async_runtime::spawn_blocking(|| permissions::request_accessibility_prompt())
+            .await
+            .map_err(|e| e.to_string())?,
+    )
 }
 
 #[tauri::command]
@@ -124,7 +124,8 @@ pub async fn dictation_retry_history_insert<R: Runtime>(
     app: AppHandle<R>,
     id: String,
 ) -> Result<String, String> {
-    let entry = history::get_entry(&app, &id).ok_or_else(|| "History entry not found".to_string())?;
+    let entry =
+        history::get_entry(&app, &id).ok_or_else(|| "History entry not found".to_string())?;
     let text = entry.text.clone();
     let method = tauri::async_runtime::spawn_blocking(move || insert::insert_text(&text))
         .await
@@ -149,7 +150,8 @@ pub async fn dictation_copy_history_entry<R: Runtime>(
     app: AppHandle<R>,
     id: String,
 ) -> Result<(), String> {
-    let entry = history::get_entry(&app, &id).ok_or_else(|| "History entry not found".to_string())?;
+    let entry =
+        history::get_entry(&app, &id).ok_or_else(|| "History entry not found".to_string())?;
     let text = entry.text.clone();
     tauri::async_runtime::spawn_blocking(move || insert::copy_text(&text))
         .await
@@ -192,9 +194,7 @@ pub async fn dictation_asr_protocol_info() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn dictation_helper_available(
-    state: State<'_, DictationState>,
-) -> Result<bool, String> {
+pub async fn dictation_helper_available(state: State<'_, DictationState>) -> Result<bool, String> {
     Ok(state.asr_has_helper())
 }
 

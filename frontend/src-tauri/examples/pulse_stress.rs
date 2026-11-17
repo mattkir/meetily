@@ -46,9 +46,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
-use app_lib::audio::capture::pulse_linux::{
-    list_sinks, list_sources, PulseCapture,
-};
+use app_lib::audio::capture::pulse_linux::{list_sinks, list_sources, PulseCapture};
 
 #[cfg(target_os = "linux")]
 fn main() {
@@ -75,14 +73,20 @@ fn main() {
         .into_iter()
         .next()
         .expect("No real input source available for microphone thread");
-    println!("Microphone source: {} ({})", source.description, source.source_name);
+    println!(
+        "Microphone source: {} ({})",
+        source.description, source.source_name
+    );
 
     let sinks = list_sinks().expect("Failed to list PulseAudio sinks");
     let sink = sinks
         .into_iter()
         .next()
         .expect("No sink available for system-audio thread");
-    println!("System sink: {} ({})", sink.description, sink.monitor_source_name);
+    println!(
+        "System sink: {} ({})",
+        sink.description, sink.monitor_source_name
+    );
 
     let start = Instant::now();
     let deadline = start + run_duration;
@@ -91,8 +95,8 @@ fn main() {
     let enum_cycles = Arc::new(AtomicUsize::new(0));
 
     // ---- Microphone capture thread ----
-    let mic_capture =
-        PulseCapture::new_microphone(&source.source_name).expect("Failed to open microphone capture");
+    let mic_capture = PulseCapture::new_microphone(&source.source_name)
+        .expect("Failed to open microphone capture");
     let mic_stop = mic_capture.stop_handle();
     let mic_samples = Arc::new(AtomicUsize::new(0));
     let mic_samples_worker = mic_samples.clone();

@@ -79,7 +79,9 @@ pub fn request_accessibility_prompt() -> bool {
 #[cfg(target_os = "macos")]
 pub fn open_privacy_pane(pane: &str) -> Result<(), String> {
     let url = match pane {
-        "microphone" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+        "microphone" => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        }
         "accessibility" => {
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
         }

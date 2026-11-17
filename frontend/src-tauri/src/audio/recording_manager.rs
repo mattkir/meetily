@@ -1,19 +1,19 @@
-use std::sync::Arc;
-use tokio::sync::mpsc;
 use anyhow::Result;
-use log::{debug, error, info, warn};
-#[cfg(target_os = "macos")]
-use std::time::Duration;
 #[cfg(target_os = "macos")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use log::{debug, error, info, warn};
+use std::sync::Arc;
+#[cfg(target_os = "macos")]
+use std::time::Duration;
+use tokio::sync::mpsc;
 
 use super::devices::AudioDevice;
 
-use super::recording_state::{RecordingState, AudioChunk};
-use super::pipeline::AudioPipelineManager;
-use super::stream::AudioStreamManager;
-use super::recording_saver::RecordingSaver;
 use super::device_monitor::{AudioDeviceMonitor, DeviceEvent};
+use super::pipeline::AudioPipelineManager;
+use super::recording_saver::RecordingSaver;
+use super::recording_state::{AudioChunk, RecordingState};
+use super::stream::AudioStreamManager;
 
 /// Stream manager type enumeration
 pub enum StreamManagerType {
@@ -61,36 +61,45 @@ const AUDIO_WAKE_SWAP_DURATION: Duration = Duration::from_millis(150);
 /// sync cpal I/O. The async wrapper below routes to it via spawn_blocking.
 #[cfg(target_os = "macos")]
 fn wake_audio_connection_sync(speaker_device_name: &str) -> Result<()> {
-    info!("[AUDIO_WAKE] Waking audio via speaker: '{}'", speaker_device_name);
+    info!(
+        "[AUDIO_WAKE] Waking audio via speaker: '{}'",
+        speaker_device_name
+    );
 
     let host = cpal::default_host();
 
-    let output_device = host.output_devices()?
+    let output_device = host
+        .output_devices()?
         .find(|d| d.name().ok().as_deref() == Some(speaker_device_name))
         .ok_or_else(|| anyhow::anyhow!("Output device '{}' not found", speaker_device_name))?;
 
     let config = output_device.default_output_config()?;
-    info!("[AUDIO_WAKE] Output config: {} Hz, {} channels",
-          config.sample_rate().0, config.channels());
+    info!(
+        "[AUDIO_WAKE] Output config: {} Hz, {} channels",
+        config.sample_rate().0,
+        config.channels()
+    );
 
     let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => {
-            output_device.build_output_stream(
-                &config.into(),
-                |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    for sample in data.iter_mut() { *sample = 0.0; }
-                },
-                |err| error!("[AUDIO_WAKE] Output stream error: {}", err),
-                None,
-            )?
-        }
+        cpal::SampleFormat::F32 => output_device.build_output_stream(
+            &config.into(),
+            |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                for sample in data.iter_mut() {
+                    *sample = 0.0;
+                }
+            },
+            |err| error!("[AUDIO_WAKE] Output stream error: {}", err),
+            None,
+        )?,
         cpal::SampleFormat::I16 => {
             // BT HFP mode frequently picks I16 for the output config — without
             // this branch the wake would error out exactly when we need it most.
             output_device.build_output_stream(
                 &config.into(),
                 |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                    for sample in data.iter_mut() { *sample = 0; }
+                    for sample in data.iter_mut() {
+                        *sample = 0;
+                    }
                 },
                 |err| error!("[AUDIO_WAKE] Output stream error: {}", err),
                 None,
@@ -102,7 +111,10 @@ fn wake_audio_connection_sync(speaker_device_name: &str) -> Result<()> {
     };
 
     stream.play()?;
-    info!("[AUDIO_WAKE] Playing silence for {} ms to wake audio connection...", AUDIO_WAKE_DURATION.as_millis());
+    info!(
+        "[AUDIO_WAKE] Playing silence for {} ms to wake audio connection...",
+        AUDIO_WAKE_DURATION.as_millis()
+    );
     std::thread::sleep(AUDIO_WAKE_DURATION);
     drop(stream);
     info!("[AUDIO_WAKE] Audio wake completed");
@@ -117,9 +129,9 @@ fn wake_audio_connection_sync(speaker_device_name: &str) -> Result<()> {
 #[cfg(target_os = "macos")]
 pub(super) async fn wake_audio_connection(speaker_device_name: &str) -> Result<()> {
     let name = speaker_device_name.to_string();
-    tokio::task::spawn_blocking(move || {
-        wake_audio_connection_sync(&name)
-    }).await.map_err(|e| anyhow::anyhow!("Join error: {}", e))?
+    tokio::task::spawn_blocking(move || wake_audio_connection_sync(&name))
+        .await
+        .map_err(|e| anyhow::anyhow!("Join error: {}", e))?
 }
 
 /// Public async wake for use by the disconnect-fallback hot-swap path in
@@ -141,38 +153,45 @@ pub async fn wake_audio_connection_for_swap(speaker_device_name: &str) -> Result
         // Try the specified device first, fall back to default output. During
         // a BT disconnect the original output device name may no longer
         // enumerate, so the fallback is what actually runs in practice.
-        let (output_device, config) = host.output_devices()?
+        let (output_device, config) = host
+            .output_devices()?
             .find(|d| d.name().ok().as_deref() == Some(&*name))
             .and_then(|d| d.default_output_config().ok().map(|c| (d, c)))
             .or_else(|| {
-                info!("[AUDIO_WAKE] '{}' not found or config failed — using default output device", name);
+                info!(
+                    "[AUDIO_WAKE] '{}' not found or config failed — using default output device",
+                    name
+                );
                 host.default_output_device()
                     .and_then(|d| d.default_output_config().ok().map(|c| (d, c)))
             })
             .ok_or_else(|| anyhow::anyhow!("No output device available for wake"))?;
         let stream = match config.sample_format() {
-            cpal::SampleFormat::F32 => {
-                output_device.build_output_stream(
-                    &config.into(),
-                    |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                        for sample in data.iter_mut() { *sample = 0.0; }
-                    },
-                    |err| error!("[AUDIO_WAKE] Hot-swap wake error: {}", err),
-                    None,
-                )?
-            }
-            cpal::SampleFormat::I16 => {
-                output_device.build_output_stream(
-                    &config.into(),
-                    |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                        for sample in data.iter_mut() { *sample = 0; }
-                    },
-                    |err| error!("[AUDIO_WAKE] Hot-swap wake error: {}", err),
-                    None,
-                )?
-            }
+            cpal::SampleFormat::F32 => output_device.build_output_stream(
+                &config.into(),
+                |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                    for sample in data.iter_mut() {
+                        *sample = 0.0;
+                    }
+                },
+                |err| error!("[AUDIO_WAKE] Hot-swap wake error: {}", err),
+                None,
+            )?,
+            cpal::SampleFormat::I16 => output_device.build_output_stream(
+                &config.into(),
+                |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
+                    for sample in data.iter_mut() {
+                        *sample = 0;
+                    }
+                },
+                |err| error!("[AUDIO_WAKE] Hot-swap wake error: {}", err),
+                None,
+            )?,
             format => {
-                return Err(anyhow::anyhow!("Unsupported sample format for wake: {:?}", format));
+                return Err(anyhow::anyhow!(
+                    "Unsupported sample format for wake: {:?}",
+                    format
+                ));
             }
         };
         stream.play()?;
@@ -180,7 +199,9 @@ pub async fn wake_audio_connection_for_swap(speaker_device_name: &str) -> Result
         drop(stream);
         info!("[AUDIO_WAKE] Hot-swap wake completed");
         Ok(())
-    }).await.map_err(|e| anyhow::anyhow!("Join error: {}", e))?
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("Join error: {}", e))?
 }
 
 /// Simplified recording manager that coordinates all audio components
@@ -234,7 +255,8 @@ impl RecordingManager {
         info!("Starting recording manager (auto_save: {})", auto_save);
 
         // Set up transcription channel
-        let (transcription_sender, transcription_receiver) = mpsc::unbounded_channel::<AudioChunk>();
+        let (transcription_sender, transcription_receiver) =
+            mpsc::unbounded_channel::<AudioChunk>();
         let (recording_sender, recording_receiver) = mpsc::unbounded_channel::<AudioChunk>();
 
         // Start recording state first
@@ -245,17 +267,25 @@ impl RecordingManager {
         // - Bluetooth: Larger buffers (80-200ms) to handle jitter
         // - Wired: Smaller buffers (20-50ms) for low latency
         let (mic_name, mic_kind) = if let Some(ref mic) = microphone_device {
-            let device_kind = super::device_detection::InputDeviceKind::detect(&mic.name, 512, 48000);
+            let device_kind =
+                super::device_detection::InputDeviceKind::detect(&mic.name, 512, 48000);
             (mic.name.clone(), device_kind)
         } else {
-            ("No Microphone".to_string(), super::device_detection::InputDeviceKind::Unknown)
+            (
+                "No Microphone".to_string(),
+                super::device_detection::InputDeviceKind::Unknown,
+            )
         };
 
         let (sys_name, sys_kind) = if let Some(ref sys) = system_device {
-            let device_kind = super::device_detection::InputDeviceKind::detect(&sys.name, 512, 48000);
+            let device_kind =
+                super::device_detection::InputDeviceKind::detect(&sys.name, 512, 48000);
             (sys.name.clone(), device_kind)
         } else {
-            ("No System Audio".to_string(), super::device_detection::InputDeviceKind::Unknown)
+            (
+                "No System Audio".to_string(),
+                super::device_detection::InputDeviceKind::Unknown,
+            )
         };
 
         // Start the audio processing pipeline with FFmpeg adaptive mixer
@@ -264,8 +294,8 @@ impl RecordingManager {
         if let Err(error) = self.pipeline_manager.start(
             self.state.clone(),
             transcription_sender,
-            0, // Ignored - using dynamic sizing internally
-            48000, // 48kHz sample rate
+            0,                      // Ignored - using dynamic sizing internally
+            48000,                  // 48kHz sample rate
             Some(recording_sender), // CRITICAL: Pass recording sender to receive pre-mixed audio
             mic_name,
             mic_kind,
@@ -276,10 +306,11 @@ impl RecordingManager {
             return Err(RecordingStartError::TranscriptionRuntime(error));
         }
 
-        self.recording_saver.start_accumulation(auto_save, recording_receiver);
+        self.recording_saver
+            .start_accumulation(auto_save, recording_receiver);
         self.recording_saver.set_device_info(
             microphone_device.as_ref().map(|d| d.name.clone()),
-            system_device.as_ref().map(|d| d.name.clone())
+            system_device.as_ref().map(|d| d.name.clone()),
         );
 
         // Give the pipeline a moment to fully initialize before starting streams
@@ -287,7 +318,11 @@ impl RecordingManager {
 
         // Start audio streams - they send RAW unmixed chunks to pipeline for mixing
         // Pipeline handles mixing and distribution to both recording and transcription
-        if let Err(e) = self.stream_manager.start_streams(microphone_device.clone(), system_device.clone(), None).await {
+        if let Err(e) = self
+            .stream_manager
+            .start_streams(microphone_device.clone(), system_device.clone(), None)
+            .await
+        {
             self.cleanup_without_save().await;
             return Err(e.into());
         }
@@ -295,7 +330,10 @@ impl RecordingManager {
         // Start device monitoring to detect disconnects
         if let Some(ref mut monitor) = self.device_monitor {
             #[cfg(target_os = "linux")]
-            let monitored = (self.state.get_microphone_device(), self.state.get_system_device());
+            let monitored = (
+                self.state.get_microphone_device(),
+                self.state.get_system_device(),
+            );
             #[cfg(not(target_os = "linux"))]
             let monitored = (microphone_device, system_device);
             if let Err(e) = monitor.start_monitoring(monitored.0, monitored.1) {
@@ -306,17 +344,23 @@ impl RecordingManager {
             }
         }
 
-        info!("Recording manager started successfully with {} active streams",
-               self.stream_manager.active_stream_count());
+        info!(
+            "Recording manager started successfully with {} active streams",
+            self.stream_manager.active_stream_count()
+        );
 
         Ok(transcription_receiver)
     }
 
     #[cfg(target_os = "linux")]
-    pub(super) fn request_capture_finish(&self) { self.stream_manager.request_finish(); }
+    pub(super) fn request_capture_finish(&self) {
+        self.stream_manager.request_finish();
+    }
 
     #[cfg(target_os = "linux")]
-    pub(super) fn finish_role(&self, microphone: bool) -> bool { self.stream_manager.finish_role(microphone) }
+    pub(super) fn finish_role(&self, microphone: bool) -> bool {
+        self.stream_manager.finish_role(microphone)
+    }
 
     /// Stop recording streams without saving (for use when waiting for transcription)
     pub async fn stop_streams_only(&mut self) -> Result<()> {
@@ -389,7 +433,10 @@ impl RecordingManager {
     }
 
     /// Save recording after transcription is complete
-    pub async fn save_recording_only<R: tauri::Runtime>(&mut self, app: &tauri::AppHandle<R>) -> Result<()> {
+    pub async fn save_recording_only<R: tauri::Runtime>(
+        &mut self,
+        app: &tauri::AppHandle<R>,
+    ) -> Result<()> {
         debug!("Saving recording with transcript chunks");
 
         // Get actual recording duration from state
@@ -397,7 +444,11 @@ impl RecordingManager {
         info!("Recording duration from state: {:?}s", recording_duration);
 
         // Save the recording with actual duration
-        match self.recording_saver.stop_and_save(app, recording_duration).await {
+        match self
+            .recording_saver
+            .stop_and_save(app, recording_duration)
+            .await
+        {
             Ok(Some(file_path)) => {
                 info!("Recording saved successfully to: {}", file_path);
             }
@@ -415,7 +466,10 @@ impl RecordingManager {
     }
 
     /// Stop recording and save audio (legacy method)
-    pub async fn stop_recording<R: tauri::Runtime>(&mut self, app: &tauri::AppHandle<R>) -> Result<()> {
+    pub async fn stop_recording<R: tauri::Runtime>(
+        &mut self,
+        app: &tauri::AppHandle<R>,
+    ) -> Result<()> {
         info!("Stopping recording manager");
 
         // Get recording duration BEFORE stopping (important!)
@@ -440,7 +494,11 @@ impl RecordingManager {
         }
 
         // Save the recording with actual duration
-        match self.recording_saver.stop_and_save(app, recording_duration).await {
+        match self
+            .recording_saver
+            .stop_and_save(app, recording_duration)
+            .await
+        {
             Ok(Some(file_path)) => {
                 info!("Recording saved successfully to: {}", file_path);
             }
@@ -624,7 +682,10 @@ impl RecordingManager {
             #[cfg(not(target_os = "linux"))]
             monitor.notify_mic_swapped(device.name.clone(), system_name);
             #[cfg(target_os = "linux")]
-            { let _ = system_name; monitor.notify_mic_swapped(device.name.clone(), None); }
+            {
+                let _ = system_name;
+                monitor.notify_mic_swapped(device.name.clone(), None);
+            }
         }
         self.state.set_microphone_device(device);
     }
@@ -634,7 +695,11 @@ impl RecordingManager {
         self.stream_manager.take_system_stream()
     }
     #[cfg(target_os = "linux")]
-    pub fn set_system_stream_after_swap(&mut self, stream: super::stream::AudioStream, device: Arc<AudioDevice>) {
+    pub fn set_system_stream_after_swap(
+        &mut self,
+        stream: super::stream::AudioStream,
+        device: Arc<AudioDevice>,
+    ) {
         self.stream_manager.set_system_stream(stream);
         self.state.set_system_device(device.clone());
         if let Some(monitor) = &self.device_monitor {
@@ -643,7 +708,10 @@ impl RecordingManager {
     }
 
     #[cfg(target_os = "linux")]
-    pub(super) fn linux_stream_kind(&self, microphone: bool) -> Option<super::stream::LinuxStreamKind> {
+    pub(super) fn linux_stream_kind(
+        &self,
+        microphone: bool,
+    ) -> Option<super::stream::LinuxStreamKind> {
         self.stream_manager.linux_stream_kind(microphone)
     }
 
@@ -653,7 +721,9 @@ impl RecordingManager {
     }
 
     #[cfg(target_os = "linux")]
-    pub fn has_working_streams(&self) -> bool { self.stream_manager.has_working_streams() }
+    pub fn has_working_streams(&self) -> bool {
+        self.stream_manager.has_working_streams()
+    }
 
     /// Get reference to recording state for external access
     pub fn get_state(&self) -> &Arc<RecordingState> {
@@ -688,9 +758,9 @@ mod wake_tests {
 
 #[cfg(all(test, target_os = "linux"))]
 mod linux_shutdown_tests {
+    use super::super::{recording_state::DeviceType, stream::linux_clock_tests::test_stream};
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use super::super::{stream::linux_clock_tests::test_stream, recording_state::DeviceType};
 
     #[tokio::test]
     async fn stop_keeps_acceptance_open_until_both_workers_finish() {
@@ -702,20 +772,36 @@ mod linux_shutdown_tests {
         let mic_finish = Arc::new(AtomicBool::new(false));
         let sys_finish = Arc::new(AtomicBool::new(false));
         for microphone in [true, false] {
-            let finish = if microphone { mic_finish.clone() } else { sys_finish.clone() };
+            let finish = if microphone {
+                mic_finish.clone()
+            } else {
+                sys_finish.clone()
+            };
             let both = (mic_finish.clone(), sys_finish.clone());
             let state = manager.state.clone();
             let worker_finish = finish.clone();
             let task = tokio::spawn(async move {
-                while !worker_finish.load(Ordering::Acquire) { tokio::task::yield_now().await; }
+                while !worker_finish.load(Ordering::Acquire) {
+                    tokio::task::yield_now().await;
+                }
                 assert!(both.0.load(Ordering::Acquire) && both.1.load(Ordering::Acquire));
                 assert!(state.is_recording());
-                state.send_audio_chunk(AudioChunk { data: vec![1.0], sample_rate: 48000,
-                    timestamp: 0.0, chunk_id: 0, device_type: DeviceType::Microphone }).unwrap();
+                state
+                    .send_audio_chunk(AudioChunk {
+                        data: vec![1.0],
+                        sample_rate: 48000,
+                        timestamp: 0.0,
+                        chunk_id: 0,
+                        device_type: DeviceType::Microphone,
+                    })
+                    .unwrap();
             });
             let stream = test_stream(if microphone { "mic" } else { "system" }, finish, task);
-            if microphone { manager.stream_manager.set_mic_stream(stream); }
-            else { manager.stream_manager.set_system_stream(stream); }
+            if microphone {
+                manager.stream_manager.set_mic_stream(stream);
+            } else {
+                manager.stream_manager.set_system_stream(stream);
+            }
         }
         manager.stop_streams_and_force_flush().await.unwrap();
         assert!(receiver.recv().await.is_some());

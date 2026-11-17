@@ -171,7 +171,7 @@ pub struct TranscriptUpdate {
     // NEW: Recording-relative timestamps for playback sync
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
-    pub duration: f64,          // Segment duration in seconds (e.g., 3.3)
+    pub duration: f64,         // Segment duration in seconds (e.g., 3.3)
 }
 
 // NOTE: get_transcript_history and get_recording_meeting_name functions
@@ -185,7 +185,8 @@ pub fn start_transcription_task<R: Runtime>(
     tokio::spawn(async move {
         info!("Starting transcription worker task");
 
-        let transcription_engine = match super::engine::get_or_init_transcription_engine(&app).await {
+        let transcription_engine = match super::engine::get_or_init_transcription_engine(&app).await
+        {
             Ok(engine) => engine,
             Err(e) => {
                 error!("Failed to initialize transcription engine");
@@ -509,55 +510,55 @@ fn format_recording_time(seconds: f64) -> String {
     let secs = total_seconds % 60;
 
     format!("[{:02}:{:02}]", minutes, secs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_short_acknowledgements() {
+        assert!(should_emit_transcript("Yes"));
+        assert!(should_emit_transcript("ok"));
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn keeps_short_acknowledgements() {
-            assert!(should_emit_transcript("Yes"));
-            assert!(should_emit_transcript("ok"));
-        }
-
-        #[test]
-        fn drops_empty_and_whitespace_only() {
-            assert!(!should_emit_transcript(""));
-            assert!(!should_emit_transcript("   "));
-        }
-
-        #[test]
-        fn logging_worker_sampling_and_diagnostics_are_bounded() {
-            for accepted_count in [1, 2, 3, 4, 5, 25, 50] {
-                assert!(should_log_transcript_snippet(accepted_count));
-            }
-            for accepted_count in [6, 24, 26, 49] {
-                assert!(!should_log_transcript_snippet(accepted_count));
-            }
-
-            let mut stats = WorkerLogStats::default();
-            for category in [
-                WorkerFailureCategory::ModelNotLoaded,
-                WorkerFailureCategory::EngineFailed,
-                WorkerFailureCategory::UnsupportedLanguage,
-                WorkerFailureCategory::SpeechDetectedEmit,
-                WorkerFailureCategory::TranscriptUpdateEmit,
-            ] {
-                stats.record_failure(category);
-            }
-            let snapshot = stats.snapshot_and_reset();
-            assert_eq!(snapshot.failed, 5);
-            assert_eq!(snapshot.model_not_loaded_failures, 1);
-            assert_eq!(snapshot.engine_failures, 1);
-            assert_eq!(snapshot.unsupported_language_failures, 1);
-            assert_eq!(snapshot.speech_detected_emit_failures, 1);
-            assert_eq!(snapshot.transcript_update_emit_failures, 1);
-            assert_eq!(stats.failed, 0);
-            assert_eq!(stats.model_not_loaded_failures, 0);
-            assert_eq!(stats.engine_failures, 0);
-            assert_eq!(stats.unsupported_language_failures, 0);
-            assert_eq!(stats.speech_detected_emit_failures, 0);
-            assert_eq!(stats.transcript_update_emit_failures, 0);
-        }
+    #[test]
+    fn drops_empty_and_whitespace_only() {
+        assert!(!should_emit_transcript(""));
+        assert!(!should_emit_transcript("   "));
     }
+
+    #[test]
+    fn logging_worker_sampling_and_diagnostics_are_bounded() {
+        for accepted_count in [1, 2, 3, 4, 5, 25, 50] {
+            assert!(should_log_transcript_snippet(accepted_count));
+        }
+        for accepted_count in [6, 24, 26, 49] {
+            assert!(!should_log_transcript_snippet(accepted_count));
+        }
+
+        let mut stats = WorkerLogStats::default();
+        for category in [
+            WorkerFailureCategory::ModelNotLoaded,
+            WorkerFailureCategory::EngineFailed,
+            WorkerFailureCategory::UnsupportedLanguage,
+            WorkerFailureCategory::SpeechDetectedEmit,
+            WorkerFailureCategory::TranscriptUpdateEmit,
+        ] {
+            stats.record_failure(category);
+        }
+        let snapshot = stats.snapshot_and_reset();
+        assert_eq!(snapshot.failed, 5);
+        assert_eq!(snapshot.model_not_loaded_failures, 1);
+        assert_eq!(snapshot.engine_failures, 1);
+        assert_eq!(snapshot.unsupported_language_failures, 1);
+        assert_eq!(snapshot.speech_detected_emit_failures, 1);
+        assert_eq!(snapshot.transcript_update_emit_failures, 1);
+        assert_eq!(stats.failed, 0);
+        assert_eq!(stats.model_not_loaded_failures, 0);
+        assert_eq!(stats.engine_failures, 0);
+        assert_eq!(stats.unsupported_language_failures, 0);
+        assert_eq!(stats.speech_detected_emit_failures, 0);
+        assert_eq!(stats.transcript_update_emit_failures, 0);
+    }
+}

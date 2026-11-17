@@ -22,8 +22,13 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
         #[cfg(target_os = "linux")]
         {
             info!("🎙️ list_audio_devices: calling configure_linux_audio");
-            let result = linux_device_query(|| platform::configure_linux_audio(&cpal::default_host())).await?;
-            info!("🎙️ list_audio_devices: configure_linux_audio returned {} device(s)", result.len());
+            let result =
+                linux_device_query(|| platform::configure_linux_audio(&cpal::default_host()))
+                    .await?;
+            info!(
+                "🎙️ list_audio_devices: configure_linux_audio returned {} device(s)",
+                result.len()
+            );
             result
         }
 
@@ -32,7 +37,10 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
             platform::configure_macos_audio(&host)?
         }
     };
-    info!("🎙️ list_audio_devices: platform enumeration done, {} device(s) so far", devices.len());
+    info!(
+        "🎙️ list_audio_devices: platform enumeration done, {} device(s) so far",
+        devices.len()
+    );
 
     // Add any additional devices from the default host.
     //
@@ -114,7 +122,10 @@ pub fn trigger_audio_permission() -> Result<bool> {
 
     // Start the stream to actually trigger the permission dialog
     if let Err(e) = stream.play() {
-        info!("[trigger_audio_permission] Failed to play stream: {} - permission likely denied", e);
+        info!(
+            "[trigger_audio_permission] Failed to play stream: {} - permission likely denied",
+            e
+        );
         return Ok(false);
     }
 
@@ -201,7 +212,8 @@ pub async fn verify_microphone_access() -> anyhow::Result<()> {
 pub(crate) async fn linux_device_query<T: Send + 'static>(
     query: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T> {
-    tokio::task::spawn_blocking(query).await
+    tokio::task::spawn_blocking(query)
+        .await
         .map_err(|e| anyhow::anyhow!("Audio device query worker failed: {}", e))?
 }
 
@@ -217,8 +229,14 @@ mod linux_query_tests {
             Err::<(), _>(anyhow::anyhow!("server unavailable"))
         }));
         tokio::task::yield_now().await;
-        assert!(!query.is_finished(), "a synchronous query blocked the runtime");
+        assert!(
+            !query.is_finished(),
+            "a synchronous query blocked the runtime"
+        );
         release.send(()).unwrap();
-        assert_eq!(query.await.unwrap().unwrap_err().to_string(), "server unavailable");
+        assert_eq!(
+            query.await.unwrap().unwrap_err().to_string(),
+            "server unavailable"
+        );
     }
 }

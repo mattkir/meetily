@@ -1,5 +1,5 @@
-use log::{debug as log_debug, error as log_error, info as log_info, warn as log_warn};
 use crate::utils::url_origin_for_log;
+use log::{debug as log_debug, error as log_error, info as log_info, warn as log_warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tauri::{AppHandle, Runtime};
@@ -426,7 +426,10 @@ pub async fn api_get_profile<R: Runtime>(
     license_key: String,
     auth_token: Option<String>,
 ) -> Result<Profile, String> {
-    log_info!("Profile lookup requested; auth_present={}", auth_token.is_some());
+    log_info!(
+        "Profile lookup requested; auth_present={}",
+        auth_token.is_some()
+    );
 
     let profile_request = ProfileRequest { email, license_key };
     let body = serde_json::to_string(&profile_request).map_err(|e| e.to_string())?;
@@ -442,7 +445,10 @@ pub async fn api_save_profile<R: Runtime>(
     email: String,
     auth_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    log_info!("Profile save requested; auth_present={}", auth_token.is_some());
+    log_info!(
+        "Profile save requested; auth_present={}",
+        auth_token.is_some()
+    );
 
     let save_request = SaveProfileRequest { id, email };
     let body = serde_json::to_string(&save_request).map_err(|e| e.to_string())?;
@@ -467,7 +473,10 @@ pub async fn api_update_profile<R: Runtime>(
     position: String,
     auth_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    log_info!("Profile update requested; auth_present={}", auth_token.is_some());
+    log_info!(
+        "Profile update requested; auth_present={}",
+        auth_token.is_some()
+    );
 
     let update_request = UpdateProfileRequest {
         email,
@@ -841,7 +850,10 @@ pub async fn api_get_meeting_metadata<R: Runtime>(
     meeting_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<MeetingMetadata, String> {
-    log_info!("api_get_meeting_metadata called for meeting_id: {}", meeting_id);
+    log_info!(
+        "api_get_meeting_metadata called for meeting_id: {}",
+        meeting_id
+    );
 
     let pool = state.db_manager.pool();
 
@@ -885,7 +897,9 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
 
     let pool = state.db_manager.pool();
 
-    match MeetingsRepository::get_meeting_transcripts_paginated(pool, &meeting_id, limit, offset).await {
+    match MeetingsRepository::get_meeting_transcripts_paginated(pool, &meeting_id, limit, offset)
+        .await
+    {
         Ok((transcripts, total_count)) => {
             log_info!(
                 "Successfully retrieved {} transcripts for meeting {} (total: {})",
@@ -916,7 +930,11 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
             })
         }
         Err(e) => {
-            log_error!("Error retrieving transcripts for meeting {}: {}", meeting_id, e);
+            log_error!(
+                "Error retrieving transcripts for meeting {}: {}",
+                meeting_id,
+                e
+            );
             Err(format!("Failed to retrieve transcripts: {}", e))
         }
     }
@@ -975,9 +993,11 @@ pub async fn api_save_transcript<R: Runtime>(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| {
             log_error!("Failed to parse transcript segments: {}", e);
-            format!("Invalid transcript data format: {}. Please check the data structure.", e)
+            format!(
+                "Invalid transcript data format: {}. Please check the data structure.",
+                e
+            )
         })?;
-
 
     let pool = state.db_manager.pool();
 
@@ -1036,7 +1056,10 @@ pub async fn open_meeting_folder<R: Runtime>(
                 // Verify folder exists
                 let path = std::path::Path::new(&folder_path);
                 if !path.exists() {
-                    log_warn!("Meeting folder path does not exist; meeting_id={}", meeting_id);
+                    log_warn!(
+                        "Meeting folder path does not exist; meeting_id={}",
+                        meeting_id
+                    );
                     return Err(format!("Recording folder not found: {}", folder_path));
                 }
 
@@ -1090,7 +1113,10 @@ pub async fn test_backend_connection<R: Runtime>(
     let client = reqwest::Client::new();
     let server_url = get_server_address(&app).await?;
 
-    log_debug!("Testing connection to origin={}", url_origin_for_log(&server_url));
+    log_debug!(
+        "Testing connection to origin={}",
+        url_origin_for_log(&server_url)
+    );
 
     let mut request = client.get(&format!("{}/docs", server_url));
 
@@ -1134,7 +1160,10 @@ pub async fn debug_backend_connection<R: Runtime>(app: AppHandle<R>) -> Result<S
     let client = reqwest::Client::new();
     let test_url = format!("{}/docs", server_url); // Try the docs endpoint which should be public
 
-    log_debug!("Testing connection to origin={}", url_origin_for_log(&test_url));
+    log_debug!(
+        "Testing connection to origin={}",
+        url_origin_for_log(&test_url)
+    );
 
     match client.get(&test_url).send().await {
         Ok(response) => {
@@ -1341,17 +1370,18 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
 
             if status.is_success() {
                 match serde_json::from_str::<serde_json::Value>(&response_text) {
-                    Ok(json) if json
-                        .get("choices")
-                        .and_then(serde_json::Value::as_array)
-                        .and_then(|choices| choices.first())
-                        .and_then(|choice| choice.get("message"))
-                        .and_then(|message| {
-                            message
-                                .get("content")
-                                .or_else(|| message.get("reasoning_content"))
-                        })
-                        .is_some() =>
+                    Ok(json)
+                        if json
+                            .get("choices")
+                            .and_then(serde_json::Value::as_array)
+                            .and_then(|choices| choices.first())
+                            .and_then(|choice| choice.get("message"))
+                            .and_then(|message| {
+                                message
+                                    .get("content")
+                                    .or_else(|| message.get("reasoning_content"))
+                            })
+                            .is_some() =>
                     {
                         log_info!(
                             "Custom OpenAI connection validated; endpoint_origin={}, status={}",
@@ -1378,7 +1408,10 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
                             endpoint_origin,
                             status
                         );
-                        Err(format!("Endpoint is reachable but returned invalid JSON: {}. Response: {}", error, response_text))
+                        Err(format!(
+                            "Endpoint is reachable but returned invalid JSON: {}. Response: {}",
+                            error, response_text
+                        ))
                     }
                 }
             } else {
@@ -1387,7 +1420,10 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
                     endpoint_origin,
                     status
                 );
-                Err(format!("Connection failed with status {}: {}", status, response_text))
+                Err(format!(
+                    "Connection failed with status {}: {}",
+                    status, response_text
+                ))
             }
         }
         Err(error) => {
@@ -1416,19 +1452,29 @@ mod external_url_tests {
         let raw = "https://example.invalid/path?a=1&b=2&literal=%25PATH%25#section";
         let url = parse_external_url(raw).unwrap();
         assert_eq!(url.as_str(), raw);
-        assert_eq!(url.query_pairs().collect::<Vec<_>>(), [
-            ("a".into(), "1".into()),
-            ("b".into(), "2".into()),
-            ("literal".into(), "%PATH%".into()),
-        ]);
+        assert_eq!(
+            url.query_pairs().collect::<Vec<_>>(),
+            [
+                ("a".into(), "1".into()),
+                ("b".into(), "2".into()),
+                ("literal".into(), "%PATH%".into()),
+            ]
+        );
     }
 
     #[test]
     fn external_url_rejects_invalid_urls_and_non_https_schemes() {
         for raw in [
-            "", "not a URL", "/relative", "//example.invalid", "https://",
-            "http://example.invalid", "javascript:alert(1)", "data:text/html,test",
-            "file:///C:/Windows/System32/cmd.exe", "mailto:test@example.invalid",
+            "",
+            "not a URL",
+            "/relative",
+            "//example.invalid",
+            "https://",
+            "http://example.invalid",
+            "javascript:alert(1)",
+            "data:text/html,test",
+            "file:///C:/Windows/System32/cmd.exe",
+            "mailto:test@example.invalid",
         ] {
             assert!(parse_external_url(raw).is_err(), "accepted {raw:?}");
         }

@@ -15,7 +15,7 @@ use super::hud::{self, HudPayload, LatencyHudMetrics};
 use super::insert::{self, InsertTarget};
 use super::polish::{self, PolishPath};
 use super::settings::{DictationEngine, DictationSettings};
-use super::{ASR_SAMPLE_RATE, END_OF_SPEECH_GRACE_MS, DAILY_READY_E2E_MS};
+use super::{ASR_SAMPLE_RATE, DAILY_READY_E2E_MS, END_OF_SPEECH_GRACE_MS};
 
 /// Warm short utterance e2e budget for daily-ready gate.
 pub const STREAM_CHUNK_MS: u64 = 120;
@@ -174,7 +174,8 @@ impl DictationAgent {
         }
 
         let settings = self.settings.read().await.clone();
-        let hk = hotkey::config_from_settings(&settings.hold_shortcut, &settings.hands_free_shortcut);
+        let hk =
+            hotkey::config_from_settings(&settings.hold_shortcut, &settings.hands_free_shortcut);
         let (tx, mut rx) = mpsc::unbounded_channel();
         let watcher = HotkeyWatcher::start(tx.clone(), hk).map_err(|e| e)?;
         *self.hotkey_tx.lock().await = Some(tx);
@@ -208,9 +209,7 @@ impl DictationAgent {
                         },
                     );
                     tokio::time::sleep(std::time::Duration::from_millis(1600)).await;
-                    agent
-                        .set_phase(&app_handle, DictationPhase::Idle, "")
-                        .await;
+                    agent.set_phase(&app_handle, DictationPhase::Idle, "").await;
                     hud::hide_hud(&app_handle);
                 }
             }
@@ -228,8 +227,7 @@ impl DictationAgent {
                 // Skip when CLI already owns the same test (`--dictation-self-test`).
                 let skip_cli = super::autostart::wants_dictation_self_test();
                 let perms = super::permissions::check_permissions();
-                let should_auto_self_test =
-                    settings.enabled && perms.all_granted() && !skip_cli;
+                let should_auto_self_test = settings.enabled && perms.all_granted() && !skip_cli;
                 if should_auto_self_test {
                     match self.run_self_test(&app, false).await {
                         Ok(result) => {
@@ -238,12 +236,8 @@ impl DictationAgent {
                                 result.daily_ready,
                                 result.metrics.e2e_ms
                             );
-                            self.set_phase(
-                                &app,
-                                DictationPhase::Idle,
-                                &result.message,
-                            )
-                            .await;
+                            self.set_phase(&app, DictationPhase::Idle, &result.message)
+                                .await;
                         }
                         Err(e) => {
                             log::warn!(
@@ -474,15 +468,51 @@ impl DictationAgent {
             .take()
             .ok_or_else(|| "No active capture".to_string())?;
 
-        // Drain any not-yet-streamed audio before finish, push final stream chunks.
+        // Snapshot undrained PCM before finish; stream it only if we keep the live ASR.
         let undrained = capture.drain_new().unwrap_or_default();
-        if !undrained.is_empty() {
-            let app_p = app.clone();
-            let _ = self
-                .asr
-                .stream_audio(&undrained, move |partial| {
+
+        let finished = tauri::async_runtime::spawn_blocking(move || capture.finish(grace_ms))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        let samples = finished.samples;
+        let resample_ms = finished.resample_ms;
+        let capture_device = finished.device_name;
+        let capture_peak = finished.peak;
+        let restarted_on_fallback = finished.restarted_on_fallback;
+
+        let app_for_partial = app.clone();
+        let (text, asr_timing) = if restarted_on_fallback {
+            // Mid-hold silent fallback may have pushed empty frames into the helper.
+            // Restart recognition over the final (built-in) buffer only.
+            log::info!("Dictation restarting ASR after silent-input mic fallback");
+            self.asr.stream_abort().await;
+            let engine = self.settings.read().await.engine;
+            self.asr
+                .stream_start(engine, |_| {})
+                .await
+                .map_err(|e| e.to_string())?;
+            for chunk in samples.chunks(1920) {
+                let app_c = app.clone();
+                self.asr
+                    .stream_audio(chunk, move |partial| {
+                        hud::show_hud(
+                            &app_c,
+                            HudPayload {
+                                phase: "processing".into(),
+                                message: "Processing…".into(),
+                                partial: Some(partial),
+                                metrics: None,
+                            },
+                        );
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            self.asr
+                .stream_finalize(&[], move |partial| {
                     hud::show_hud(
-                        &app_p,
+                        &app_for_partial,
                         HudPayload {
                             phase: "processing".into(),
                             message: "Processing…".into(),
@@ -491,47 +521,52 @@ impl DictationAgent {
                         },
                     );
                 })
-                .await;
-        }
-
-        let (samples, resample_ms) = tauri::async_runtime::spawn_blocking(move || {
-            capture.finish(grace_ms)
-        })
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
-
-        // Trailing samples after last drain — finish returns full buffer; send only
-        // the grace-period delta by comparing lengths is hard. Send empty trailing
-        // and rely on already-streamed audio + finalize buffer in helper.
-        // For correctness: finalize with empty trailing if we streamed; helper has buffer.
-        // Also push any samples beyond what was streamed — we lost the drained cursor
-        // when we took ownership. Re-send last ~grace window as trailing.
-        let trailing_samples = {
-            let n = ((grace_ms as f64 / 1000.0) * ASR_SAMPLE_RATE as f64) as usize + 160;
-            if samples.len() > n {
-                samples[samples.len() - n..].to_vec()
-            } else {
-                samples.clone()
+                .await
+                .map_err(|e| e.to_string())?
+        } else {
+            if !undrained.is_empty() {
+                let app_p = app.clone();
+                let _ = self
+                    .asr
+                    .stream_audio(&undrained, move |partial| {
+                        hud::show_hud(
+                            &app_p,
+                            HudPayload {
+                                phase: "processing".into(),
+                                message: "Processing…".into(),
+                                partial: Some(partial),
+                                metrics: None,
+                            },
+                        );
+                    })
+                    .await;
             }
-        };
 
-        let app_for_partial = app.clone();
-        let (text, asr_timing) = self
-            .asr
-            .stream_finalize(&trailing_samples, move |partial| {
-                hud::show_hud(
-                    &app_for_partial,
-                    HudPayload {
-                        phase: "processing".into(),
-                        message: "Processing…".into(),
-                        partial: Some(partial),
-                        metrics: None,
-                    },
-                );
-            })
-            .await
-            .map_err(|e| e.to_string())?;
+            // Trailing samples after last drain — re-send last ~grace window.
+            let trailing_samples = {
+                let n = ((grace_ms as f64 / 1000.0) * ASR_SAMPLE_RATE as f64) as usize + 160;
+                if samples.len() > n {
+                    samples[samples.len() - n..].to_vec()
+                } else {
+                    samples.clone()
+                }
+            };
+
+            self.asr
+                .stream_finalize(&trailing_samples, move |partial| {
+                    hud::show_hud(
+                        &app_for_partial,
+                        HudPayload {
+                            phase: "processing".into(),
+                            message: "Processing…".into(),
+                            partial: Some(partial),
+                            metrics: None,
+                        },
+                    );
+                })
+                .await
+                .map_err(|e| e.to_string())?
+        };
 
         let duration_ms = (samples.len() as f64 / ASR_SAMPLE_RATE as f64 * 1000.0) as u64;
         let settings = self.settings.read().await.clone();
@@ -543,7 +578,37 @@ impl DictationAgent {
 
         if cleaned.is_empty() {
             *self.insert_target.lock().await = None;
-            self.set_phase(app, DictationPhase::Idle, "No speech").await;
+            let message = if capture_peak < super::capture::DIGITAL_SILENCE_PEAK {
+                let device = if capture_device.is_empty() {
+                    "microphone".into()
+                } else {
+                    capture_device
+                };
+                format!("No audio from {device}")
+            } else {
+                "Didn't catch any words".into()
+            };
+            log::info!(
+                "Dictation empty transcript peak={:.6} duration_ms={} reason={}",
+                capture_peak,
+                duration_ms,
+                if capture_peak < super::capture::DIGITAL_SILENCE_PEAK {
+                    "digital_silence"
+                } else {
+                    "no_words"
+                }
+            );
+            self.set_phase(app, DictationPhase::Idle, &message).await;
+            hud::show_hud(
+                app,
+                HudPayload {
+                    phase: "error".into(),
+                    message: message.clone(),
+                    partial: None,
+                    metrics: None,
+                },
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
             hud::hide_hud(app);
             crate::tray::refresh_dictation_status(app).await;
             return Ok(());
@@ -607,13 +672,7 @@ impl DictationAgent {
         };
 
         let engine_label = format!("{:?}", settings.engine);
-        let _ = history::append_entry(
-            app,
-            cleaned,
-            &engine_label,
-            duration_ms,
-            method_label,
-        );
+        let _ = history::append_entry(app, cleaned, &engine_label, duration_ms, method_label);
 
         hud::show_hud(
             app,
@@ -687,9 +746,7 @@ impl DictationAgent {
         let grace_ms = END_OF_SPEECH_GRACE_MS;
 
         // ~0.4s of low-level noise so engines return quickly (no private audio).
-        let synthetic: Vec<f32> = (0..6400)
-            .map(|i| (i as f32 * 0.02).sin() * 0.02)
-            .collect();
+        let synthetic: Vec<f32> = (0..6400).map(|i| (i as f32 * 0.02).sin() * 0.02).collect();
 
         let app_p = app.clone();
         self.asr
@@ -755,8 +812,8 @@ impl DictationAgent {
         };
         self.record_metrics(&metrics, 400).await;
 
-        let daily_ready = self.warm_ready.load(Ordering::SeqCst)
-            && metrics.e2e_ms < DAILY_READY_E2E_MS;
+        let daily_ready =
+            self.warm_ready.load(Ordering::SeqCst) && metrics.e2e_ms < DAILY_READY_E2E_MS;
         let message = if daily_ready {
             format!(
                 "Daily ready · warm short e2e {}ms (<{}ms)",
@@ -860,7 +917,11 @@ impl DictationAgent {
 
 impl DictationAgent {
     /// Start background stream pump + hands-free watcher (needs Arc).
-    pub async fn after_begin_listen<R: Runtime>(self: &Arc<Self>, app: AppHandle<R>, hands_free: bool) {
+    pub async fn after_begin_listen<R: Runtime>(
+        self: &Arc<Self>,
+        app: AppHandle<R>,
+        hands_free: bool,
+    ) {
         self.start_stream_pump(app.clone()).await;
         if hands_free {
             self.start_hands_free_watch(app).await;
